@@ -1,0 +1,36 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import AdminSidebar from '@/components/admin/sidebar'
+import AdminDashboard from '@/components/admin/dashboard'
+
+export default function AdminPage() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const router = useRouter()
+
+  useEffect(() => {
+    // Verificar sesión
+    const session = localStorage.getItem('adminSession')
+    if (!session) {
+      router.push('/admin/login')
+    } else {
+      setIsAuthenticated(true)
+    }
+    setIsLoading(false)
+  }, [router])
+
+  if (isLoading) return null
+
+  if (!isAuthenticated) return null
+
+  return (
+    <div className="flex h-screen bg-background">
+      <AdminSidebar />
+      <main className="flex-1 overflow-auto">
+        <AdminDashboard />
+      </main>
+    </div>
+  )
+}
