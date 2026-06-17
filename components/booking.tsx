@@ -1,24 +1,52 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Calendar, Clock, User, ChevronLeft, ChevronRight, Check } from "lucide-react"
+import { Calendar, Clock, ChevronLeft, ChevronRight, Check } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 
-const services = [
-  { id: "kinesiologia", name: "Kinesiología", duration: "45 min" },
-]
+const serviceLabels: Record<string, { name: string; duration: string }> = {
+  kinesiologia: { name: "Kinesiología", duration: "45 min" },
+  traumatologia: { name: "Traumatología", duration: "45 min" },
+}
 
-const timeSlots = [
-  "08:00", "08:30", "09:00", "09:30", "10:00", "10:30",
-  "11:00", "11:30", "14:00", "14:30", "15:00", "15:30",
-  "16:00", "16:30", "17:00", "17:30", "18:00", "18:30"
-]
+type AvailabilityRow = {
+  id: string
+  usuario_id: string
+  servicio: string
+  dia_semana: number
+  hora_inicio: string
+  hora_fin: string
+  intervalo_minutos: number
+  duracion_minutos: number
+  usuarios?: {
+    nombre: string
+    apellido: string
+  }[] | null
+}
 
-const professionals = [
-  { id: "1", name: "Dr. Martín García", specialty: "Traumatología" },
-  { id: "2", name: "Lic. Laura Rodríguez", specialty: "Kinesiología" },
-]
+type ServiceOption = {
+  id: string
+  name: string
+  duration: string
+}
+
+type SlotProfessional = {
+  id: string
+  name: string
+}
+
+type SlotOption = {
+  time: string
+  capacity: number
+  remaining: number
+  professionals: SlotProfessional[]
+}
+
+type ActiveTreatment = {
+  id: string
+  sesiones_totales: number
+}
 
 function getDaysInMonth(year: number, month: number) {
   return new Date(year, month + 1, 0).getDate()
@@ -33,21 +61,141 @@ const monthNames = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
 ]
 
+function formatLocalDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function normalizeTimeSlot(time: string) {
+  return time.slice(0, 5)
+}
+
+function timeToMinutes(time: string) {
+  const normalized = normalizeTimeSlot(time)
+  const [hours, minutes] = normalized.split(":").map(Number)
+  return hours * 60 + minutes
+}
+
+function minutesToTime(totalMinutes: number) {
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0")
+  const minutes = String(totalMinutes % 60).padStart(2, "0")
+  return `${hours}:${minutes}`
+}
+
+function getServiceLabel(serviceId: string) {
+  return serviceLabels[serviceId] || {
+    name: serviceId.charAt(0).toUpperCase() + serviceId.slice(1),
+    duration: "45 min",
+  }
+}
+
+function getProfessionalName(row: AvailabilityRow) {
+  const professional = row.usuarios?.[0]
+  return professional
+    ? `${professional.nombre} ${professional.apellido}`
+    : "Profesional disponible"
+}
+
+function buildSlotOptions(
+  rows: AvailabilityRow[],
+  bookedTurnos: Array<{ hora: string; usuario_id: string | null }>
+) {
+  const slotMap = new Map<string, SlotOption>()
+  const bookedCountByTime = new Map<string, number>()
+  const bookedProfessionalIdsByTime = new Map<string, Set<string>>()
+
+  for (const turno of bookedTurnos) {
+    const slotTime = normalizeTimeSlot(turno.hora)
+    bookedCountByTime.set(slotTime, (bookedCountByTime.get(slotTime) || 0) + 1)
+
+    if (turno.usuario_id) {
+      const bookedSet = bookedProfessionalIdsByTime.get(slotTime) || new Set<string>()
+      bookedSet.add(turno.usuario_id)
+      bookedProfessionalIdsByTime.set(slotTime, bookedSet)
+    }
+  }
+
+  for (const row of rows) {
+    const startMinutes = timeToMinutes(row.hora_inicio)
+    const endMinutes = timeToMinutes(row.hora_fin)
+
+    for (let current = startMinutes; current + row.duracion_minutos <= endMinutes; current += row.intervalo_minutos) {
+      const slotTime = minutesToTime(current)
+      const existingSlot = slotMap.get(slotTime)
+      const professionalName = getProfessionalName(row)
+
+      if (existingSlot) {
+        if (!existingSlot.professionals.some((professional) => professional.id === row.usuario_id)) {
+          existingSlot.professionals.push({ id: row.usuario_id, name: professionalName })
+          existingSlot.capacity += 1
+        }
+      } else {
+        slotMap.set(slotTime, {
+          time: slotTime,
+          capacity: 1,
+          remaining: 1,
+          professionals: [{ id: row.usuario_id, name: professionalName }],
+        })
+      }
+    }
+  }
+
+  return Array.from(slotMap.values())
+    .map((slot) => ({
+      ...slot,
+      remaining: Math.max(0, slot.capacity - (bookedCountByTime.get(slot.time) || 0)),
+      professionals: slot.professionals.filter((professional) => {
+        const bookedSet = bookedProfessionalIdsByTime.get(slot.time)
+        return !bookedSet?.has(professional.id)
+      }),
+    }))
+    .sort((first, second) => timeToMinutes(first.time) - timeToMinutes(second.time))
+}
+
 export function Booking() {
   const [step, setStep] = useState(1)
+  const [services, setServices] = useState<ServiceOption[]>([])
+  const [availabilityRows, setAvailabilityRows] = useState<AvailabilityRow[]>([])
   const [selectedService, setSelectedService] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [selectedTime, setSelectedTime] = useState<string | null>(null)
-  const [selectedProfessional, setSelectedProfessional] = useState<string | null>(null)
-  const [formData, setFormData] = useState({ name: "", email: "", phone: "" })
+  const [availableSlots, setAvailableSlots] = useState<SlotOption[]>([])
+  const [isReturningPatient, setIsReturningPatient] = useState<boolean | null>(null)
+  const [appointmentMode, setAppointmentMode] = useState<'tratamiento' | 'suelta'>('suelta')
+  const [insuranceName, setInsuranceName] = useState('')
+  const [treatmentSessions, setTreatmentSessions] = useState('10')
+  const [medicalOrderFile, setMedicalOrderFile] = useState<File | null>(null)
+  const [dni, setDni] = useState('')
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '' })
   const [isSubmitted, setIsSubmitted] = useState(false)
+  const [createdSessionsCount, setCreatedSessionsCount] = useState(1)
+  const [isLoadingConfig, setIsLoadingConfig] = useState(true)
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false)
+  const [configError, setConfigError] = useState<string | null>(null)
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const submitLockRef = useRef(false)
 
   const today = new Date()
+  today.setHours(0, 0, 0, 0)
   const [currentMonth, setCurrentMonth] = useState(today.getMonth())
   const [currentYear, setCurrentYear] = useState(today.getFullYear())
 
   const daysInMonth = getDaysInMonth(currentYear, currentMonth)
   const firstDayOfMonth = getFirstDayOfMonth(currentYear, currentMonth)
+
+  const insuranceAdvice = (() => {
+    const normalized = insuranceName.toLowerCase().trim()
+    if (!normalized) return null
+    if (normalized.includes('osde')) return 'OSDE: al presentarte, acercá credencial y orden médica vigente.'
+    if (normalized.includes('iapos')) return 'IAPOS: validaremos cobertura y posibles copagos antes de iniciar sesiones.'
+    if (normalized.includes('pami')) return 'PAMI: deberás presentar derivación y documentación al ingreso.'
+    if (normalized.includes('particular')) return 'Particular: podés avanzar con normalidad y pagar por sesión o plan.'
+    return 'Tu obra social será validada por administración al confirmar la primera sesión.'
+  })()
 
   const handlePrevMonth = () => {
     if (currentMonth === 0) {
@@ -70,78 +218,402 @@ export function Booking() {
   const isDateDisabled = (day: number) => {
     const date = new Date(currentYear, currentMonth, day)
     const dayOfWeek = date.getDay()
-    return dayOfWeek === 0 || date < today
+
+    if (date < today || dayOfWeek === 0 || !selectedService) {
+      return true
+    }
+
+    return !availabilityRows.some(
+      (row) => row.servicio === selectedService && row.dia_semana === dayOfWeek
+    )
   }
+
+  useEffect(() => {
+    let isActive = true
+
+    const fetchAvailabilityConfig = async () => {
+      setIsLoadingConfig(true)
+      setConfigError(null)
+
+      try {
+        const supabase = createClient()
+        const { data, error } = await supabase
+          .from('disponibilidad_profesional')
+          .select('id, usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos, usuarios(nombre, apellido)')
+          .eq('activo', true)
+          .order('servicio')
+          .order('dia_semana')
+          .order('hora_inicio')
+
+        if (error) throw error
+        if (!isActive) return
+
+        const rows = (data || []) as unknown as AvailabilityRow[]
+        const serviceOptions = Array.from(new Set(rows.map((row) => row.servicio))).map((serviceId) => {
+          const serviceLabel = getServiceLabel(serviceId)
+          const firstRow = rows.find((row) => row.servicio === serviceId)
+          return {
+            id: serviceId,
+            name: serviceLabel.name,
+            duration: `${firstRow?.duracion_minutos || 45} min`,
+          }
+        })
+
+        setAvailabilityRows(rows)
+        setServices(serviceOptions)
+        setSelectedService((current) => {
+          if (current && serviceOptions.some((service) => service.id === current)) return current
+          return serviceOptions[0]?.id || null
+        })
+      } catch (error) {
+        console.error('[v0] Error loading availability config:', error)
+        if (isActive) {
+          setAvailabilityRows([])
+          setServices([])
+          setConfigError('No se pudo cargar la agenda desde Supabase.')
+        }
+      } finally {
+        if (isActive) setIsLoadingConfig(false)
+      }
+    }
+
+    fetchAvailabilityConfig()
+    return () => {
+      isActive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedService) {
+      setSelectedDate(null)
+      setSelectedTime(null)
+      setAvailableSlots([])
+      return
+    }
+
+    if (selectedDate) {
+      const selectedDayOfWeek = selectedDate.getDay()
+      const hasAvailability = availabilityRows.some(
+        (row) => row.servicio === selectedService && row.dia_semana === selectedDayOfWeek
+      )
+
+      if (!hasAvailability) {
+        setSelectedDate(null)
+        setSelectedTime(null)
+        setAvailableSlots([])
+      }
+    }
+  }, [selectedService, selectedDate, availabilityRows])
+
+  useEffect(() => {
+    if (!selectedDate || !selectedService) {
+      setAvailableSlots([])
+      setAvailabilityError(null)
+      return
+    }
+
+    let isActive = true
+
+    const fetchAvailableSlots = async () => {
+      setIsLoadingAvailability(true)
+      setAvailabilityError(null)
+
+      try {
+        const dayRows = availabilityRows.filter(
+          (row) => row.servicio === selectedService && row.dia_semana === selectedDate.getDay()
+        )
+
+        if (dayRows.length === 0) {
+          if (isActive) {
+            setAvailableSlots([])
+            setSelectedTime(null)
+          }
+          return
+        }
+
+        const supabase = createClient()
+        const { data, error } = await supabase
+          .from('turnos')
+          .select('hora, usuario_id')
+          .eq('fecha', formatLocalDate(selectedDate))
+          .eq('servicio', selectedService)
+          .neq('estado', 'cancelado')
+
+        if (error) throw error
+        if (!isActive) return
+
+        const slots = buildSlotOptions(dayRows, (data || []) as Array<{ hora: string; usuario_id: string | null }>)
+        setAvailableSlots(slots)
+        setSelectedTime((current) => {
+          if (!current) return current
+          const selectedSlot = slots.find((slot) => slot.time === current)
+          return selectedSlot && selectedSlot.remaining > 0 ? current : null
+        })
+      } catch (error) {
+        console.error('[v0] Error loading available slots:', error)
+        if (isActive) {
+          setAvailableSlots([])
+          setAvailabilityError('No se pudo cargar la disponibilidad en este momento.')
+        }
+      } finally {
+        if (isActive) setIsLoadingAvailability(false)
+      }
+    }
+
+    fetchAvailableSlots()
+    return () => {
+      isActive = false
+    }
+  }, [selectedDate, selectedService, availabilityRows])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+    setSubmitError(null)
+
+    if (submitLockRef.current) {
+      return
+    }
+
+    submitLockRef.current = true
+    setIsSubmitting(true)
+
     try {
       const supabase = createClient()
-      
-      // Normalizar nombre para búsqueda (minúsculas, sin espacios extra)
-      const normalizedName = formData.name.toLowerCase().trim().replace(/\s+/g, ' ')
-      const nameParts = normalizedName.split(' ')
-      const firstName = nameParts[0]
-      const lastName = nameParts.slice(1).join(' ')
 
-      // Buscar paciente existente - tolerante a mayúsculas/minúsculas y espacios
-      const { data: existingPatients } = await supabase
-        .from('pacientes')
-        .select('*')
+      if (!selectedDate || !selectedTime || !selectedService) {
+        setSubmitError('Completá servicio, fecha y horario antes de confirmar.')
+        return
+      }
 
-      // Buscar coincidencia tolerante
+      if (!insuranceName.trim()) {
+        setSubmitError('Indicá tu obra social antes de continuar.')
+        setStep(2)
+        return
+      }
+
+      if (isReturningPatient === null) {
+        setSubmitError('Indicá si ya te atendiste anteriormente.')
+        setStep(5)
+        return
+      }
+
+      if (!dni.trim()) {
+        setSubmitError('Ingresá tu DNI para continuar.')
+        setStep(5)
+        return
+      }
+
+      const sessionsRequested = appointmentMode === 'tratamiento'
+        ? Math.max(1, Number(treatmentSessions || '1'))
+        : 1
+
+      if (appointmentMode === 'tratamiento' && !medicalOrderFile) {
+        setSubmitError('Para iniciar tratamiento debés adjuntar la orden médica.')
+        setStep(2)
+        return
+      }
+
+      if (!isReturningPatient) {
+        if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
+          setSubmitError('Completá tus datos personales para crear el paciente.')
+          setStep(5)
+          return
+        }
+      }
+
+      const selectedSlot = availableSlots.find((slot) => slot.time === selectedTime)
+      if (!selectedSlot || selectedSlot.remaining <= 0) {
+        setSubmitError('Ese horario ya no tiene disponibilidad. Elegí otro.')
+        setStep(4)
+        return
+      }
+
+      const slotTime = `${selectedTime}:00`
+
       let patientId: string | null = null
-      if (existingPatients) {
-        const matched = existingPatients.find(p => 
-          p.nombre.toLowerCase().trim() === firstName &&
-          p.apellido.toLowerCase().trim() === lastName &&
-          p.telefono === formData.phone
-        )
-        if (matched) {
-          patientId = matched.id
-        }
-      }
+      const normalizedDni = dni.trim()
 
-      // Si no existe, crear nuevo paciente
-      if (!patientId) {
-        const { data: pacientesData } = await supabase
+      if (isReturningPatient) {
+        const { data: existingPatient, error: existingPatientError } = await supabase
           .from('pacientes')
-          .insert({
-            nombre: firstName.charAt(0).toUpperCase() + firstName.slice(1),
-            apellido: lastName.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
-            email: formData.email,
-            telefono: formData.phone
-          })
-          .select()
+          .select('id, obra_social')
+          .eq('dni', normalizedDni)
+          .maybeSingle()
 
-        if (pacientesData && pacientesData[0]) {
-          patientId = pacientesData[0].id
+        if (existingPatientError) throw existingPatientError
+        if (!existingPatient) {
+          setSubmitError('No encontramos un paciente con ese DNI. Verificá el dato o elegí "No" para registrarte.')
+          return
+        }
+
+        patientId = existingPatient.id
+
+        if (existingPatient.obra_social !== insuranceName.trim()) {
+          await supabase
+            .from('pacientes')
+            .update({ obra_social: insuranceName.trim() })
+            .eq('id', patientId)
+        }
+      } else {
+        const nameParts = formData.name.toLowerCase().trim().replace(/\s+/g, ' ').split(' ')
+        const firstName = nameParts[0]
+        const lastName = nameParts.slice(1).join(' ')
+
+        const { data: patientByDni, error: patientByDniError } = await supabase
+          .from('pacientes')
+          .select('id')
+          .eq('dni', normalizedDni)
+          .maybeSingle()
+
+        if (patientByDniError) throw patientByDniError
+
+        if (patientByDni) {
+          patientId = patientByDni.id
+          await supabase
+            .from('pacientes')
+            .update({
+              nombre: firstName.charAt(0).toUpperCase() + firstName.slice(1),
+              apellido: lastName.split(' ').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+              email: formData.email.trim(),
+              telefono: formData.phone.trim(),
+              obra_social: insuranceName.trim(),
+            })
+            .eq('id', patientId)
+        } else {
+          const { data: pacientesData, error: createPatientError } = await supabase
+            .from('pacientes')
+            .insert({
+              nombre: firstName.charAt(0).toUpperCase() + firstName.slice(1),
+              apellido: lastName.split(' ').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+              email: formData.email.trim(),
+              telefono: formData.phone.trim(),
+              dni: normalizedDni,
+              obra_social: insuranceName.trim(),
+            })
+            .select('id')
+            .single()
+
+          if (createPatientError) throw createPatientError
+          patientId = pacientesData.id
         }
       }
 
-      // Crear turno si se encontró o creó paciente
-      if (patientId) {
-        // Convertir fecha a formato local YYYY-MM-DD sin considerar zona horaria
-        const year = selectedDate?.getFullYear()
-        const month = String(selectedDate?.getMonth()! + 1).padStart(2, '0')
-        const day = String(selectedDate?.getDate()).padStart(2, '0')
-        const dateStr = `${year}-${month}-${day}`
+      if (!patientId) {
+        setSubmitError('No pudimos identificar al paciente para generar los turnos.')
+        return
+      }
 
-        await supabase
+      const scheduledDates = Array.from({ length: sessionsRequested }, (_, index) => {
+        const date = new Date(selectedDate)
+        date.setDate(date.getDate() + 7 * index)
+        return formatLocalDate(date)
+      })
+
+      const assignments: Array<{ fecha: string; usuarioId: string | null }> = []
+
+      for (const dateStr of scheduledDates) {
+        const { data: existingTurnos, error: slotError } = await supabase
           .from('turnos')
+          .select('id, usuario_id')
+          .eq('fecha', dateStr)
+          .eq('servicio', selectedService)
+          .eq('hora', slotTime)
+          .neq('estado', 'cancelado')
+
+        if (slotError) throw slotError
+        if ((existingTurnos || []).length >= selectedSlot.capacity) {
+          setSubmitError(`No hay cupo para ${dateStr} a las ${selectedTime}. Probá con otro horario.`)
+          return
+        }
+
+        const bookedProfessionalIds = new Set(
+          (existingTurnos || [])
+            .map((turno) => turno.usuario_id)
+            .filter((usuarioId): usuarioId is string => Boolean(usuarioId))
+        )
+
+        const assignedProfessional =
+          selectedSlot.professionals.find((professional) => !bookedProfessionalIds.has(professional.id)) ||
+          selectedSlot.professionals[0] ||
+          null
+
+        if (!assignedProfessional) {
+          setSubmitError(`No pudimos asignar profesional para ${dateStr}. Probá otro horario.`)
+          return
+        }
+
+        assignments.push({ fecha: dateStr, usuarioId: assignedProfessional.id })
+      }
+
+      let tratamientoId: string | null = null
+
+      if (appointmentMode === 'tratamiento') {
+        let orderReference = medicalOrderFile?.name || 'orden_medica'
+
+        if (medicalOrderFile) {
+          const safeFileName = medicalOrderFile.name.replace(/\s+/g, '_')
+          const uploadPath = `${normalizedDni}/${Date.now()}_${safeFileName}`
+          const { error: uploadError } = await supabase
+            .storage
+            .from('ordenes-medicas')
+            .upload(uploadPath, medicalOrderFile, { upsert: true })
+
+          if (!uploadError) {
+            const { data: urlData } = supabase.storage.from('ordenes-medicas').getPublicUrl(uploadPath)
+            orderReference = urlData.publicUrl
+          }
+        }
+
+        const { data: createdTreatment, error: treatmentError } = await supabase
+          .from('tratamientos')
           .insert({
             paciente_id: patientId,
-            servicio: 'kinesiologia',
-            fecha: dateStr,
-            hora: selectedTime + ':00',
-            estado: 'pendiente'
+            servicio: selectedService,
+            tipo_plan: 'orden',
+            sesiones_totales: sessionsRequested,
+            sesiones_realizadas: 0,
+            precio_total: 0,
+            monto_pagado: 0,
+            estado: 'activo',
+            notas: `Obra social: ${insuranceName.trim()} | Orden: ${orderReference}`,
           })
+          .select('id')
+          .single()
+
+        if (treatmentError) throw treatmentError
+        tratamientoId = createdTreatment.id
       }
 
+      for (let index = 0; index < assignments.length; index += 1) {
+        const assignment = assignments[index]
+        const payload = {
+          paciente_id: patientId,
+          usuario_id: assignment.usuarioId,
+          tratamiento_id: tratamientoId,
+          numero_sesion: appointmentMode === 'tratamiento' ? index + 1 : null,
+          servicio: selectedService,
+          fecha: assignment.fecha,
+          hora: slotTime,
+          estado: 'pendiente',
+        }
+
+        const { error: insertTurnoError } = await supabase.from('turnos').insert(payload)
+
+        // Si la base tiene una regla de unicidad para evitar duplicados,
+        // no cortamos el flujo cuando el turno ya existe.
+        if (insertTurnoError && insertTurnoError.code !== '23505') {
+          throw insertTurnoError
+        }
+      }
+
+      setCreatedSessionsCount(assignments.length)
       setIsSubmitted(true)
     } catch (error) {
-      console.error('[v0] Error booking appointment:', error)
+      console.error('[v0] Error creating booking:', error)
+      setSubmitError('No se pudo completar la reserva. Revisá la configuracion de agenda y volvé a intentar.')
+    } finally {
+      submitLockRef.current = false
+      setIsSubmitting(false)
     }
   }
 
@@ -155,7 +627,9 @@ export function Booking() {
             </div>
             <h2 className="font-serif text-4xl md:text-5xl mb-4">¡Turno reservado!</h2>
             <p className="text-muted-foreground text-lg mb-8">
-              Sistema de reserva de turnos. Los kinesiólogos asignarán al profesional según disponibilidad y especialidad requerida.
+              {appointmentMode === 'tratamiento'
+                ? `Se generaron ${createdSessionsCount} sesiones semanales en el mismo horario.`
+                : 'Se registró tu sesión suelta correctamente.'}
             </p>
             <div className="bg-card border border-border rounded-lg p-6 text-left mb-8">
               <div className="grid gap-4">
@@ -171,6 +645,10 @@ export function Booking() {
                   <span className="text-muted-foreground">Hora</span>
                   <span className="font-medium">{selectedTime} hs</span>
                 </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Modalidad</span>
+                  <span className="font-medium">{appointmentMode === 'tratamiento' ? 'Tratamiento' : 'Sesión suelta'}</span>
+                </div>
               </div>
             </div>
             <Button 
@@ -180,7 +658,13 @@ export function Booking() {
                 setSelectedService(null)
                 setSelectedDate(null)
                 setSelectedTime(null)
-                setFormData({ name: "", email: "", phone: "" })
+                setIsReturningPatient(null)
+                setAppointmentMode('suelta')
+                setInsuranceName('')
+                setTreatmentSessions('10')
+                setMedicalOrderFile(null)
+                setDni('')
+                setFormData({ name: '', email: '', phone: '' })
               }}
               variant="outline"
             >
@@ -208,14 +692,14 @@ export function Booking() {
         {/* Progress Steps */}
         <div className="max-w-2xl mx-auto mb-12">
           <div className="flex items-center justify-between">
-            {[1, 2, 3, 4].map((s) => (
+            {[1, 2, 3, 4, 5].map((s) => (
               <div key={s} className="flex items-center">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
                   step >= s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
                 }`}>
                   {s}
                 </div>
-                {s < 4 && (
+                {s < 5 && (
                   <div className={`hidden sm:block w-16 md:w-24 h-0.5 mx-2 transition-colors ${
                     step > s ? "bg-primary" : "bg-muted"
                   }`} />
@@ -225,9 +709,10 @@ export function Booking() {
           </div>
           <div className="flex justify-between mt-2 text-xs text-muted-foreground">
             <span>Servicio</span>
+            <span className="hidden sm:inline">Modalidad</span>
             <span className="hidden sm:inline">Fecha</span>
             <span className="hidden sm:inline">Horario</span>
-            <span>Datos</span>
+            <span>Paciente</span>
           </div>
         </div>
 
@@ -235,10 +720,21 @@ export function Booking() {
           {/* Step 1: Service Selection */}
           {step === 1 && (
             <div className="grid gap-4">
+              {isLoadingConfig && (
+                <p className="text-sm text-muted-foreground">Cargando agenda desde Supabase...</p>
+              )}
+              {configError && (
+                <p className="text-sm text-destructive">{configError}</p>
+              )}
               {services.map((service) => (
                 <button
                   key={service.id}
-                  onClick={() => setSelectedService(service.id)}
+                  onClick={() => {
+                    setSelectedService(service.id)
+                    setSelectedDate(null)
+                    setSelectedTime(null)
+                    setSubmitError(null)
+                  }}
                   className={`w-full p-6 rounded-lg border text-left transition-all ${
                     selectedService === service.id 
                       ? "border-primary bg-primary/5" 
@@ -263,9 +759,12 @@ export function Booking() {
                   </div>
                 </button>
               ))}
+              {!isLoadingConfig && services.length === 0 && !configError && (
+                <p className="text-sm text-muted-foreground">No hay servicios configurados en Supabase.</p>
+              )}
               <Button 
                 className="mt-4"
-                disabled={!selectedService}
+                disabled={!selectedService || isLoadingConfig || services.length === 0}
                 onClick={() => setStep(2)}
               >
                 Continuar
@@ -273,8 +772,93 @@ export function Booking() {
             </div>
           )}
 
-          {/* Step 2: Date Selection */}
+          {/* Step 2: Mode + Insurance */}
           {step === 2 && (
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h3 className="font-serif text-2xl mb-4">¿Cómo querés atenderte?</h3>
+
+              <div className="grid sm:grid-cols-2 gap-3 mb-5">
+                <button
+                  type="button"
+                  onClick={() => setAppointmentMode('tratamiento')}
+                  className={`p-4 rounded-lg border text-left ${appointmentMode === 'tratamiento' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                >
+                  <p className="font-medium">Iniciar tratamiento</p>
+                  <p className="text-sm text-muted-foreground">Plan de múltiples sesiones con orden médica.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAppointmentMode('suelta')}
+                  className={`p-4 rounded-lg border text-left ${appointmentMode === 'suelta' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                >
+                  <p className="font-medium">Sesión suelta</p>
+                  <p className="text-sm text-muted-foreground">Reserva individual como hasta ahora.</p>
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-2">Obra social</label>
+                <input
+                  type="text"
+                  required
+                  value={insuranceName}
+                  onChange={(e) => setInsuranceName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                  placeholder="Ej: OSDE, IAPOS, Particular"
+                />
+                {insuranceAdvice ? (
+                  <p className="text-xs text-muted-foreground mt-2">{insuranceAdvice}</p>
+                ) : null}
+              </div>
+
+              {appointmentMode === 'tratamiento' && (
+                <div className="space-y-4 mt-4 p-4 bg-secondary/40 rounded-lg border border-border">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Cantidad de sesiones</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={40}
+                      value={treatmentSessions}
+                      onChange={(e) => setTreatmentSessions(e.target.value)}
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Orden médica (archivo)</label>
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png,.webp"
+                      onChange={(e) => setMedicalOrderFile(e.target.files?.[0] || null)}
+                      className="w-full px-4 py-3 rounded-lg border border-input bg-background"
+                    />
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Se tomarán sesiones semanales en el mismo día y horario seleccionado.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-4 mt-6">
+                <Button variant="outline" onClick={() => setStep(1)}>
+                  Volver
+                </Button>
+                <Button 
+                  className="flex-1"
+                  disabled={!insuranceName.trim() || (appointmentMode === 'tratamiento' && (!medicalOrderFile || Number(treatmentSessions || '0') <= 0))}
+                  onClick={() => {
+                    setSubmitError(null)
+                    setStep(3)
+                  }}
+                >
+                  Continuar
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Date Selection */}
+          {step === 3 && (
             <div className="bg-card border border-border rounded-lg p-6">
               <div className="flex items-center justify-between mb-6">
                 <button onClick={handlePrevMonth} className="p-2 hover:bg-secondary rounded-lg">
@@ -289,7 +873,7 @@ export function Booking() {
               </div>
 
               <div className="grid grid-cols-7 gap-2 mb-4">
-                {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((day) => (
+                {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((day) => (
                   <div key={day} className="text-center text-xs text-muted-foreground py-2">
                     {day}
                   </div>
@@ -302,9 +886,9 @@ export function Booking() {
                 ))}
                 {Array.from({ length: daysInMonth }).map((_, i) => {
                   const day = i + 1
-                  const isSelected = selectedDate?.getDate() === day && 
-                                     selectedDate?.getMonth() === currentMonth && 
-                                     selectedDate?.getFullYear() === currentYear
+                  const isSelected = selectedDate?.getDate() === day &&
+                    selectedDate?.getMonth() === currentMonth &&
+                    selectedDate?.getFullYear() === currentYear
                   const disabled = isDateDisabled(day)
 
                   return (
@@ -314,10 +898,10 @@ export function Booking() {
                       onClick={() => setSelectedDate(new Date(currentYear, currentMonth, day))}
                       className={`aspect-square rounded-lg text-sm font-medium transition-colors ${
                         isSelected
-                          ? "bg-primary text-primary-foreground"
+                          ? 'bg-primary text-primary-foreground'
                           : disabled
-                          ? "text-muted-foreground/40 cursor-not-allowed"
-                          : "hover:bg-secondary"
+                          ? 'text-muted-foreground/40 cursor-not-allowed'
+                          : 'hover:bg-secondary'
                       }`}
                     >
                       {day}
@@ -326,14 +910,18 @@ export function Booking() {
                 })}
               </div>
 
-              <div className="flex gap-4 mt-6">
-                <Button variant="outline" onClick={() => setStep(1)}>
+              <p className="text-xs text-muted-foreground mt-4">
+                Solo se habilitan fechas con agenda cargada en Supabase para el servicio seleccionado.
+              </p>
+
+              <div className="flex gap-4">
+                <Button variant="outline" onClick={() => setStep(2)}>
                   Volver
                 </Button>
                 <Button 
                   className="flex-1"
                   disabled={!selectedDate}
-                  onClick={() => setStep(3)}
+                  onClick={() => setStep(4)}
                 >
                   Continuar
                 </Button>
@@ -341,8 +929,8 @@ export function Booking() {
             </div>
           )}
 
-          {/* Step 3: Time Selection */}
-          {step === 3 && (
+          {/* Step 4: Time Selection */}
+          {step === 4 && (
             <div className="bg-card border border-border rounded-lg p-6">
               <div className="flex items-center gap-2 mb-4">
                 <Calendar className="w-5 h-5 text-primary" />
@@ -352,34 +940,51 @@ export function Booking() {
               </div>
 
               <h4 className="font-medium mb-4">Seleccioná un horario</h4>
+              {isLoadingAvailability && (
+                <p className="text-sm text-muted-foreground mb-4">Cargando horarios reservados...</p>
+              )}
+              {availabilityError && (
+                <p className="text-sm text-destructive mb-4">{availabilityError}</p>
+              )}
+              {!isLoadingAvailability && availableSlots.length === 0 && !availabilityError && (
+                <p className="text-sm text-muted-foreground mb-4">No hay horarios configurados o disponibles para esta fecha.</p>
+              )}
+
               <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 mb-6">
-                {timeSlots.map((time) => (
-                  <button
-                    key={time}
-                    onClick={() => setSelectedTime(time)}
-                    className={`py-2 px-3 rounded-lg text-sm transition-colors ${
-                      selectedTime === time
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary hover:bg-secondary/80"
-                    }`}
-                  >
-                    {time}
-                  </button>
-                ))}
+                {availableSlots.map((slot) => {
+                  const isBooked = slot.remaining === 0
+                  return (
+                    <button
+                      key={slot.time}
+                      disabled={isBooked || isLoadingAvailability}
+                      onClick={() => setSelectedTime(slot.time)}
+                      className={`py-2 px-3 rounded-lg text-sm transition-colors ${
+                        selectedTime === slot.time
+                          ? 'bg-primary text-primary-foreground'
+                          : isBooked
+                          ? 'bg-muted text-muted-foreground cursor-not-allowed line-through'
+                          : 'bg-secondary hover:bg-secondary/80'
+                      }`}
+                    >
+                      <div>{slot.time}</div>
+                      <div className="text-[10px] opacity-80">{slot.remaining}/{slot.capacity}</div>
+                    </button>
+                  )
+                })}
               </div>
 
               <p className="text-sm text-muted-foreground mb-6 p-4 bg-muted rounded-lg">
-                Un profesional se asignará automáticamente según disponibilidad.
+                {appointmentMode === 'tratamiento'
+                  ? 'Si elegís tratamiento, se intentará reservar la misma franja horaria semanal durante todas las sesiones.'
+                  : 'Los cupos salen de la agenda configurada en Supabase y se asignan según disponibilidad real.'}
               </p>
 
               <div className="flex gap-4">
-                <Button variant="outline" onClick={() => setStep(2)}>
-                  Volver
-                </Button>
-                <Button 
+                <Button variant="outline" onClick={() => setStep(3)}>Volver</Button>
+                <Button
                   className="flex-1"
-                  disabled={!selectedTime}
-                  onClick={() => setStep(4)}
+                  disabled={!selectedTime || isLoadingAvailability}
+                  onClick={() => setStep(5)}
                 >
                   Continuar
                 </Button>
@@ -387,68 +992,111 @@ export function Booking() {
             </div>
           )}
 
-          {/* Step 4: Contact Form */}
-          {step === 4 && (
+          {/* Step 5: Patient Identity */}
+          {step === 5 && (
             <form onSubmit={handleSubmit} className="bg-card border border-border rounded-lg p-6">
               <div className="mb-6 p-4 bg-secondary/50 rounded-lg">
                 <h4 className="font-medium mb-2">Resumen de tu turno</h4>
                 <div className="text-sm text-muted-foreground space-y-1">
                   <p>{services.find(s => s.id === selectedService)?.name}</p>
                   <p>{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })} a las {selectedTime} hs</p>
+                  <p>Modalidad: {appointmentMode === 'tratamiento' ? `Tratamiento (${Math.max(1, Number(treatmentSessions || '1'))} sesiones)` : 'Sesión suelta'}</p>
+                  <p>Obra social: {insuranceName || 'No informada'}</p>
                 </div>
               </div>
 
               <div className="space-y-4">
+                {submitError && (
+                  <p className="text-sm text-destructive">{submitError}</p>
+                )}
+
                 <div>
-                  <label htmlFor="name" className="block text-sm font-medium mb-2">
-                    Nombre completo
-                  </label>
+                  <p className="block text-sm font-medium mb-2">¿Ya te atendiste alguna vez?</p>
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsReturningPatient(true)}
+                      className={`px-4 py-3 rounded-lg border text-left ${isReturningPatient === true ? 'border-primary bg-primary/5' : 'border-border'}`}
+                    >
+                      Sí, ya soy paciente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsReturningPatient(false)}
+                      className={`px-4 py-3 rounded-lg border text-left ${isReturningPatient === false ? 'border-primary bg-primary/5' : 'border-border'}`}
+                    >
+                      No, es mi primera vez
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="dni" className="block text-sm font-medium mb-2">DNI</label>
                   <input
-                    id="name"
+                    id="dni"
                     type="text"
                     required
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    value={dni}
+                    onChange={(e) => setDni(e.target.value)}
                     className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                    placeholder="Juan Pérez"
+                    placeholder="Ej: 32123456"
                   />
                 </div>
-                <div>
-                  <label htmlFor="email" className="block text-sm font-medium mb-2">
-                    Email
-                  </label>
-                  <input
-                    id="email"
-                    type="email"
-                    required
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                    placeholder="juan@email.com"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="phone" className="block text-sm font-medium mb-2">
-                    Teléfono
-                  </label>
-                  <input
-                    id="phone"
-                    type="tel"
-                    required
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                    placeholder="11 1234-5678"
-                  />
-                </div>
+
+                {isReturningPatient === false && (
+                  <>
+                    <div>
+                      <label htmlFor="name" className="block text-sm font-medium mb-2">
+                        Nombre completo
+                      </label>
+                      <input
+                        id="name"
+                        type="text"
+                        required
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                        placeholder="Juan Pérez"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="email" className="block text-sm font-medium mb-2">
+                        Email
+                      </label>
+                      <input
+                        id="email"
+                        type="email"
+                        required
+                        value={formData.email}
+                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                        className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                        placeholder="juan@email.com"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="phone" className="block text-sm font-medium mb-2">
+                        Teléfono
+                      </label>
+                      <input
+                        id="phone"
+                        type="tel"
+                        required
+                        value={formData.phone}
+                        onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                        className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                        placeholder="11 1234-5678"
+                      />
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="flex gap-4 mt-6">
-                <Button type="button" variant="outline" onClick={() => setStep(3)}>
+                <Button type="button" variant="outline" onClick={() => setStep(4)}>
                   Volver
                 </Button>
-                <Button type="submit" className="flex-1">
-                  Confirmar turno
+                <Button type="submit" className="flex-1" disabled={isSubmitting}>
+                  {isSubmitting ? 'Confirmando...' : 'Confirmar turno'}
                 </Button>
               </div>
             </form>

@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -19,6 +20,17 @@ interface TurnoCompletionModalProps {
   onComplete: () => void
 }
 
+interface TratamientoInfo {
+  id: string
+  sesiones_totales: number
+  sesiones_realizadas: number
+  precio_total: number
+  monto_pagado: number
+  estado: string
+}
+
+const SESSION_AMOUNT = 6000
+
 export default function TurnoCompletionModal({
   open,
   onOpenChange,
@@ -27,19 +39,23 @@ export default function TurnoCompletionModal({
 }: TurnoCompletionModalProps) {
   const [asistido, setAsistido] = useState(true)
   const [cobrado, setCobrado] = useState(true)
-  const [pagoCustom, setPagoCustom] = useState(false)
-  const [montoCustom, setMontoCustom] = useState<string>('')
+  const [pagado, setPagado] = useState(true)
+  const [usarImporte, setUsarImporte] = useState(false)
+  const [importeDescuento, setImporteDescuento] = useState('')
   const [loading, setLoading] = useState(false)
   const [saldo, setSaldo] = useState({ deuda: 0, sesiones: 0 })
+  const [tratamiento, setTratamiento] = useState<TratamientoInfo | null>(null)
 
-  // Cargar saldo al abrir el modal
   useEffect(() => {
     if (open && turno) {
+      setAsistido(true)
+      setCobrado(true)
+      setPagado(true)
+      setUsarImporte(false)
+      setImporteDescuento('')
       fetchPatientBalance()
     }
   }, [open, turno])
-
-  const MONTO_SESION = 6000 // $6000 por sesión
 
   const fetchPatientBalance = async () => {
     try {
@@ -50,10 +66,32 @@ export default function TurnoCompletionModal({
         .eq('paciente_id', turno.paciente_id)
         .maybeSingle()
 
+      if (turno.tratamiento_id) {
+        const { data: treatmentData } = await supabase
+          .from('tratamientos')
+          .select('id, sesiones_totales, sesiones_realizadas, precio_total, monto_pagado, estado')
+          .eq('id', turno.tratamiento_id)
+          .maybeSingle()
+
+        if (treatmentData) {
+          setTratamiento({
+            ...treatmentData,
+            precio_total: Number(treatmentData.precio_total || 0),
+            monto_pagado: Number(treatmentData.monto_pagado || 0),
+          } as TratamientoInfo)
+        } else {
+          setTratamiento(null)
+        }
+      } else {
+        setTratamiento(null)
+      }
+
       if (data) {
-        setSaldo({ deuda: data.saldo_deuda || 0, sesiones: data.sesiones_pendientes || 0 })
+        setSaldo({
+          deuda: Number(data.saldo_deuda || 0),
+          sesiones: Number(data.sesiones_pendientes || 0),
+        })
       } else if (!data && !error) {
-        // Si no existe registro, inicializar con 0
         setSaldo({ deuda: 0, sesiones: 0 })
       }
     } catch (error) {
@@ -65,32 +103,60 @@ export default function TurnoCompletionModal({
     setLoading(true)
     try {
       const supabase = createClient()
-      const montoAPagar = pagoCustom ? parseFloat(montoCustom) : (cobrado ? MONTO_SESION : 0)
+      const isMarkedAsCharged = cobrado
+      const isPaidNow = cobrado && pagado
+      const descuentoCuentaCorriente = usarImporte
+        ? Math.max(0, Number.parseFloat(importeDescuento || '0'))
+        : 0
+      const deudaGeneradaEnTurno = asistido && isMarkedAsCharged && !isPaidNow ? SESSION_AMOUNT : 0
+      const pagoAplicado = (isPaidNow ? SESSION_AMOUNT : 0) + descuentoCuentaCorriente
 
-      // Actualizar turno
       await supabase
         .from('turnos')
         .update({
           asistido,
-          cobrado: cobrado || pagoCustom,
-          monto_pagado: montoAPagar || null,
+          cobrado: isMarkedAsCharged,
+          monto_pagado: isPaidNow ? SESSION_AMOUNT : null,
           estado: 'realizado',
         })
         .eq('id', turno.id)
 
-      // Calcular nuevo saldo
       let nuevoSaldo = saldo.deuda
-      const nuevosSesiones = asistido ? Math.max(0, saldo.sesiones - 1) : saldo.sesiones
+      let nuevosSesiones = asistido ? Math.max(0, saldo.sesiones - 1) : saldo.sesiones
 
-      if (cobrado || pagoCustom) {
-        // Si se cobra, descuenta de la deuda
-        nuevoSaldo = Math.max(0, saldo.deuda - montoAPagar)
-      } else if (asistido) {
-        // Si asistió pero no se cobró, suma $6000 a la deuda
-        nuevoSaldo = saldo.deuda + MONTO_SESION
+      if (tratamiento) {
+        const sesionesActualizadas = asistido
+          ? Math.min(tratamiento.sesiones_realizadas + 1, tratamiento.sesiones_totales)
+          : tratamiento.sesiones_realizadas
+
+        const precioTotalActualizado = Math.max(0, tratamiento.precio_total + deudaGeneradaEnTurno)
+        const montoPagadoActualizado = Math.min(
+          precioTotalActualizado,
+          Math.max(0, tratamiento.monto_pagado + pagoAplicado)
+        )
+        const sesionesPendientes = Math.max(tratamiento.sesiones_totales - sesionesActualizadas, 0)
+        const estadoTratamiento = sesionesPendientes === 0
+          ? 'completado'
+          : tratamiento.estado === 'cancelado'
+          ? 'cancelado'
+          : 'activo'
+
+        nuevoSaldo = Math.max(precioTotalActualizado - montoPagadoActualizado, 0)
+        nuevosSesiones = sesionesPendientes
+
+        await supabase
+          .from('tratamientos')
+          .update({
+            sesiones_realizadas: sesionesActualizadas,
+            precio_total: precioTotalActualizado,
+            monto_pagado: montoPagadoActualizado,
+            estado: estadoTratamiento,
+          })
+          .eq('id', tratamiento.id)
+      } else {
+        nuevoSaldo = Math.max(0, saldo.deuda + deudaGeneradaEnTurno - pagoAplicado)
       }
 
-      // Actualizar saldo del paciente
       await supabase
         .from('saldo_paciente')
         .upsert({
@@ -101,15 +167,28 @@ export default function TurnoCompletionModal({
           onConflict: 'paciente_id'
         })
 
-      // Registrar movimiento en caja si se cobró
-      if (cobrado || pagoCustom) {
+      if (isPaidNow) {
         await supabase
           .from('movimientos_caja')
           .insert({
             tipo: 'ingreso',
-            categoria: 'Kinesiología',
-            monto: montoAPagar,
+            categoria: turno.service || 'Turnos',
+            monto: SESSION_AMOUNT,
             descripcion: `Pago sesión ${turno.patient || 'paciente'}`,
+            turno_id: turno.id,
+            paciente_id: turno.paciente_id,
+            fecha: new Date().toISOString().split('T')[0],
+          })
+      }
+
+      if (descuentoCuentaCorriente > 0) {
+        await supabase
+          .from('movimientos_caja')
+          .insert({
+            tipo: 'ingreso',
+            categoria: 'Cuenta corriente',
+            monto: descuentoCuentaCorriente,
+            descripcion: `Pago cuenta corriente ${turno.patient || 'paciente'}`,
             turno_id: turno.id,
             paciente_id: turno.paciente_id,
             fecha: new Date().toISOString().split('T')[0],
@@ -130,11 +209,19 @@ export default function TurnoCompletionModal({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Completar turno</DialogTitle>
+          <DialogDescription>
+            Si marcás Cobrado y Pagado se registra ingreso en caja. Si marcás solo Cobrado, se suma a la cuenta corriente.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="bg-muted p-4 rounded-lg">
             <p className="text-sm text-muted-foreground mb-2">Paciente: {turno?.patient}</p>
+            {tratamiento ? (
+              <p className="text-xs text-muted-foreground mb-2">
+                Tratamiento activo: {tratamiento.sesiones_realizadas}/{tratamiento.sesiones_totales} sesiones realizadas
+              </p>
+            ) : null}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-xs text-muted-foreground">Adeuda</p>
@@ -158,37 +245,61 @@ export default function TurnoCompletionModal({
               <span className="text-sm font-medium">Asistido</span>
             </label>
 
-            <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
-              <input
-                type="checkbox"
-                checked={cobrado}
-                onChange={(e) => setCobrado(e.target.checked)}
-                disabled={pagoCustom}
-                className="w-4 h-4"
-              />
-              <span className="text-sm font-medium">Cobrado ${MONTO_SESION.toLocaleString('es-AR')}</span>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
+                <input
+                  type="checkbox"
+                  checked={cobrado}
+                  onChange={(e) => {
+                    const checked = e.target.checked
+                    setCobrado(checked)
+                    if (!checked) {
+                      setPagado(false)
+                    }
+                  }}
+                  className="w-4 h-4"
+                />
+                <span className="text-sm font-medium">Cobrado $6.000</span>
+              </label>
+
+              <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
+                <input
+                  type="checkbox"
+                  checked={pagado}
+                  onChange={(e) => setPagado(e.target.checked)}
+                  disabled={!cobrado}
+                  className="w-4 h-4"
+                />
+                <span className="text-sm font-medium">Pagado</span>
+              </label>
+            </div>
 
             <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
               <input
                 type="checkbox"
-                checked={pagoCustom}
-                onChange={(e) => setPagoCustom(e.target.checked)}
+                checked={usarImporte}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  setUsarImporte(checked)
+                  if (!checked) {
+                    setImporteDescuento('')
+                  }
+                }}
                 className="w-4 h-4"
               />
-              <span className="text-sm font-medium">Pago personalizado</span>
+              <span className="text-sm font-medium">Importe (descontar cuenta corriente)</span>
             </label>
 
-            {pagoCustom && (
+            {usarImporte && (
               <div>
-                <label className="text-sm font-medium">Monto a cobrar</label>
+                <label className="text-sm font-medium">Monto a descontar</label>
                 <Input
                   type="number"
                   min="0"
                   step="0.01"
-                  value={montoCustom}
-                  onChange={(e) => setMontoCustom(e.target.value)}
-                  placeholder="$0.00"
+                  value={importeDescuento}
+                  onChange={(e) => setImporteDescuento(e.target.value)}
+                  placeholder="Ej: 2000"
                   className="mt-1"
                 />
               </div>

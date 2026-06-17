@@ -1,20 +1,22 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { createClient } from '@/lib/supabase/client'
 import { Plus, Edit2, Trash2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
 
 interface CajaEntry {
-  id: number
+  id: string
   date: string
   description: string
   type: 'ingreso' | 'egreso'
@@ -23,14 +25,13 @@ interface CajaEntry {
 }
 
 export default function AdminCaja() {
-  const [entries, setEntries] = useState<CajaEntry[]>([
-    { id: 1, date: '2025-06-20', description: 'Turno Juan Pérez', type: 'ingreso', amount: 500, category: 'Kinesiología' },
-    { id: 2, date: '2025-06-20', description: 'Pago servicios', type: 'egreso', amount: 200, category: 'Servicios' },
-    { id: 3, date: '2025-06-20', description: 'Turno María García', type: 'ingreso', amount: 450, category: 'Traumatología' },
-  ])
+  const [entries, setEntries] = useState<CajaEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const [showModal, setShowModal] = useState(false)
-  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [customCategory, setCustomCategory] = useState('')
   const [formData, setFormData] = useState<Partial<CajaEntry>>({
     date: new Date().toISOString().split('T')[0],
@@ -45,9 +46,50 @@ export default function AdminCaja() {
     egreso: ['Servicios', 'Suministros', 'Personal', 'Utilidades', 'Otros']
   }
 
-  const totalIngresos = entries.filter(e => e.type === 'ingreso').reduce((sum, e) => sum + e.amount, 0)
-  const totalEgresos = entries.filter(e => e.type === 'egreso').reduce((sum, e) => sum + e.amount, 0)
+  const totalIngresos = useMemo(
+    () => entries.filter(e => e.type === 'ingreso').reduce((sum, e) => sum + e.amount, 0),
+    [entries]
+  )
+  const totalEgresos = useMemo(
+    () => entries.filter(e => e.type === 'egreso').reduce((sum, e) => sum + e.amount, 0),
+    [entries]
+  )
   const saldo = totalIngresos - totalEgresos
+
+  useEffect(() => {
+    fetchEntries()
+  }, [])
+
+  const fetchEntries = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const supabase = createClient()
+      const { data, error: fetchError } = await supabase
+        .from('movimientos_caja')
+        .select('id, tipo, categoria, monto, descripcion, fecha')
+        .order('fecha', { ascending: false })
+        .order('created_at', { ascending: false })
+
+      if (fetchError) throw fetchError
+
+      const mapped = (data || []).map((row: any) => ({
+        id: row.id,
+        date: row.fecha,
+        description: row.descripcion || '',
+        type: row.tipo,
+        amount: Number(row.monto || 0),
+        category: row.categoria || 'Otros',
+      })) as CajaEntry[]
+
+      setEntries(mapped)
+    } catch (fetchFailure) {
+      console.error('[v0] Error loading caja entries:', fetchFailure)
+      setError('No se pudieron cargar los movimientos de caja.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleAdd = () => {
     setFormData({
@@ -69,19 +111,66 @@ export default function AdminCaja() {
     setShowModal(true)
   }
 
-  const handleDelete = (id: number) => {
-    setEntries(entries.filter(e => e.id !== id))
+  const handleDelete = async (id: string) => {
+    try {
+      setSaving(true)
+      setError(null)
+      const supabase = createClient()
+      const { error: deleteError } = await supabase
+        .from('movimientos_caja')
+        .delete()
+        .eq('id', id)
+
+      if (deleteError) throw deleteError
+
+      setEntries((current) => current.filter((entry) => entry.id !== id))
+    } catch (deleteFailure) {
+      console.error('[v0] Error deleting caja entry:', deleteFailure)
+      setError('No se pudo borrar el movimiento.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!formData.description?.trim() || !formData.amount) return
 
-    if (editingId === null) {
-      setEntries([...entries, { ...formData, id: Math.max(...entries.map(e => e.id), 0) + 1 } as CajaEntry])
-    } else {
-      setEntries(entries.map(e => e.id === editingId ? { ...formData as CajaEntry } : e))
+    try {
+      setSaving(true)
+      setError(null)
+      const supabase = createClient()
+
+      const payload = {
+        fecha: formData.date,
+        tipo: formData.type,
+        categoria: formData.category,
+        monto: Number(formData.amount || 0),
+        descripcion: formData.description,
+      }
+
+      if (editingId === null) {
+        const { error: insertError } = await supabase
+          .from('movimientos_caja')
+          .insert(payload)
+
+        if (insertError) throw insertError
+      } else {
+        const { error: updateError } = await supabase
+          .from('movimientos_caja')
+          .update(payload)
+          .eq('id', editingId)
+
+        if (updateError) throw updateError
+      }
+
+      await fetchEntries()
+      setShowModal(false)
+    } catch (saveFailure) {
+      console.error('[v0] Error saving caja entry:', saveFailure)
+      setError('No se pudo guardar el movimiento.')
+    } finally {
+      setSaving(false)
     }
-    setShowModal(false)
   }
 
   return (
@@ -89,13 +178,19 @@ export default function AdminCaja() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-4xl font-bold">Caja</h1>
-          <p className="text-muted-foreground">Gestiona ingresos y egresos</p>
+          <p className="text-muted-foreground">Gestiona ingresos y egresos desde la base de datos</p>
         </div>
         <Button onClick={handleAdd} className="gap-2">
           <Plus className="w-4 h-4" />
           Nuevo movimiento
         </Button>
       </div>
+
+      {error && (
+        <Card className="p-4 mb-6 border-destructive/30 bg-destructive/5 text-sm text-destructive">
+          {error}
+        </Card>
+      )}
 
       {/* Summary Cards */}
       <div className="grid md:grid-cols-3 gap-4 mb-8">
@@ -118,6 +213,9 @@ export default function AdminCaja() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editingId ? 'Editar movimiento' : 'Nuevo movimiento'}</DialogTitle>
+            <DialogDescription>
+              Completá los datos del movimiento para guardarlo en caja.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -198,8 +296,8 @@ export default function AdminCaja() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowModal(false)}>Cancelar</Button>
-            <Button onClick={handleSubmit}>{editingId ? 'Guardar cambios' : 'Registrar movimiento'}</Button>
+            <Button variant="outline" onClick={() => setShowModal(false)} disabled={saving}>Cancelar</Button>
+            <Button onClick={handleSubmit} disabled={saving}>{saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Registrar movimiento'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -219,7 +317,13 @@ export default function AdminCaja() {
               </tr>
             </thead>
             <tbody>
-              {entries.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
+                    Cargando movimientos...
+                  </td>
+                </tr>
+              ) : entries.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                     No hay movimientos registrados
@@ -256,6 +360,7 @@ export default function AdminCaja() {
                           size="sm"
                           variant="ghost"
                           onClick={() => handleDelete(entry.id)}
+                          disabled={saving}
                         >
                           <Trash2 className="w-4 h-4 text-destructive" />
                         </Button>

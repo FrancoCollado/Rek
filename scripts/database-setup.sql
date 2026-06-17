@@ -53,13 +53,42 @@ CREATE POLICY "Allow all to update pacientes" ON pacientes FOR UPDATE USING (TRU
 CREATE POLICY "Allow all to delete pacientes" ON pacientes FOR DELETE USING (TRUE);
 
 -- ============================================
+-- TABLA: tratamientos
+-- ============================================
+CREATE TABLE tratamientos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  paciente_id UUID NOT NULL REFERENCES pacientes(id) ON DELETE CASCADE,
+  servicio TEXT NOT NULL CHECK (servicio IN ('kinesiologia', 'traumatologia')),
+  tipo_plan TEXT NOT NULL DEFAULT 'orden' CHECK (tipo_plan IN ('orden', 'libre')),
+  sesiones_totales INTEGER NOT NULL DEFAULT 1 CHECK (sesiones_totales > 0),
+  sesiones_realizadas INTEGER NOT NULL DEFAULT 0 CHECK (sesiones_realizadas >= 0),
+  precio_total DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  monto_pagado DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  fecha_inicio DATE NOT NULL DEFAULT CURRENT_DATE,
+  fecha_fin_estimada DATE,
+  notas TEXT,
+  estado TEXT NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo', 'pausado', 'completado', 'cancelado')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE tratamientos ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all to view tratamientos" ON tratamientos FOR SELECT USING (TRUE);
+CREATE POLICY "Allow all to insert tratamientos" ON tratamientos FOR INSERT WITH CHECK (TRUE);
+CREATE POLICY "Allow all to update tratamientos" ON tratamientos FOR UPDATE USING (TRUE);
+CREATE POLICY "Allow all to delete tratamientos" ON tratamientos FOR DELETE USING (TRUE);
+
+-- ============================================
 -- TABLA: turnos
 -- ============================================
 CREATE TABLE turnos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   paciente_id UUID NOT NULL REFERENCES pacientes(id) ON DELETE CASCADE,
   usuario_id UUID REFERENCES usuarios(id) ON DELETE SET NULL,
+  tratamiento_id UUID REFERENCES tratamientos(id) ON DELETE SET NULL,
   servicio TEXT NOT NULL CHECK (servicio IN ('kinesiologia', 'traumatologia')),
+  numero_sesion INTEGER,
   fecha DATE NOT NULL,
   hora TIME NOT NULL,
   duracion_minutos INTEGER DEFAULT 45,
@@ -78,6 +107,33 @@ CREATE POLICY "Allow all to view turnos" ON turnos FOR SELECT USING (TRUE);
 CREATE POLICY "Allow all to insert turnos" ON turnos FOR INSERT WITH CHECK (TRUE);
 CREATE POLICY "Allow all to update turnos" ON turnos FOR UPDATE USING (TRUE);
 CREATE POLICY "Allow all to delete turnos" ON turnos FOR DELETE USING (TRUE);
+
+-- ============================================
+-- TABLA: disponibilidad_profesional
+-- ============================================
+CREATE TABLE disponibilidad_profesional (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  usuario_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  servicio TEXT NOT NULL CHECK (servicio IN ('kinesiologia', 'traumatologia')),
+  dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 1 AND 6),
+  hora_inicio TIME NOT NULL,
+  hora_fin TIME NOT NULL,
+  intervalo_minutos INTEGER NOT NULL DEFAULT 30,
+  duracion_minutos INTEGER NOT NULL DEFAULT 45,
+  activo BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CHECK (hora_inicio < hora_fin),
+  CHECK (intervalo_minutos > 0),
+  CHECK (duracion_minutos > 0)
+);
+
+ALTER TABLE disponibilidad_profesional ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all to view disponibilidad_profesional" ON disponibilidad_profesional FOR SELECT USING (TRUE);
+CREATE POLICY "Allow all to insert disponibilidad_profesional" ON disponibilidad_profesional FOR INSERT WITH CHECK (TRUE);
+CREATE POLICY "Allow all to update disponibilidad_profesional" ON disponibilidad_profesional FOR UPDATE USING (TRUE);
+CREATE POLICY "Allow all to delete disponibilidad_profesional" ON disponibilidad_profesional FOR DELETE USING (TRUE);
 
 -- ============================================
 -- TABLA: movimientos_caja
@@ -146,6 +202,36 @@ FROM pacientes p, usuarios u WHERE u.email = 'franco@rek.com' AND p.nombre = 'Ca
 INSERT INTO turnos (paciente_id, usuario_id, servicio, fecha, hora, estado) 
 SELECT p.id, u.id, 'traumatologia', CURRENT_DATE + INTERVAL '2 days', '10:30'::time, 'confirmado'
 FROM pacientes p, usuarios u WHERE u.email = 'juan@rek.com' AND p.nombre = 'Laura' LIMIT 1;
+
+-- Insert test tratamientos
+INSERT INTO tratamientos (paciente_id, servicio, tipo_plan, sesiones_totales, sesiones_realizadas, precio_total, monto_pagado, fecha_inicio, estado)
+SELECT id, 'kinesiologia', 'orden', 10, 2, 60000, 12000, CURRENT_DATE - INTERVAL '7 day', 'activo'
+FROM pacientes WHERE nombre = 'Carlos' LIMIT 1;
+
+-- Insert disponibilidad_profesional
+INSERT INTO disponibilidad_profesional (usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos)
+SELECT id, 'kinesiologia', day_number, '08:00'::time, '12:00'::time, 30, 45
+FROM usuarios
+CROSS JOIN generate_series(1, 5) AS day_number
+WHERE email = 'franco@rek.com';
+
+INSERT INTO disponibilidad_profesional (usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos)
+SELECT id, 'kinesiologia', day_number, '14:00'::time, '19:00'::time, 30, 45
+FROM usuarios
+CROSS JOIN generate_series(1, 5) AS day_number
+WHERE email = 'franco@rek.com';
+
+INSERT INTO disponibilidad_profesional (usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos)
+SELECT id, 'traumatologia', day_number, '09:00'::time, '13:00'::time, 30, 45
+FROM usuarios
+CROSS JOIN generate_series(1, 5) AS day_number
+WHERE email = 'juan@rek.com';
+
+INSERT INTO disponibilidad_profesional (usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos)
+SELECT id, 'kinesiologia', day_number, '15:00'::time, '18:30'::time, 30, 45
+FROM usuarios
+CROSS JOIN generate_series(1, 5) AS day_number
+WHERE email = 'juan@rek.com';
 
 -- Insert test movimientos_caja
 INSERT INTO movimientos_caja (tipo, categoria, monto, descripcion, fecha) VALUES
