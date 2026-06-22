@@ -6,8 +6,8 @@ import { Calendar, Clock, ChevronLeft, ChevronRight, Check } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 
 const serviceLabels: Record<string, { name: string; duration: string }> = {
-  kinesiologia: { name: "Kinesiología", duration: "45 min" },
-  traumatologia: { name: "Traumatología", duration: "45 min" },
+  kinesiologia: { name: "Kinesiología", duration: "30 min" },
+  traumatologia: { name: "Traumatología", duration: "30 min" },
 }
 
 type AvailabilityRow = {
@@ -46,6 +46,59 @@ type SlotOption = {
 type ActiveTreatment = {
   id: string
   sesiones_totales: number
+}
+
+type SelectedSession = {
+  date: string
+  time: string
+}
+
+type InsurancePreset = 'iapos' | 'swiss_medical' | 'otra'
+
+type InsurancePolicy = {
+  displayName: string
+  perSessionAmount: number
+  stampAmount: number
+  requirements: string[]
+}
+
+function getInsurancePolicy(preset: InsurancePreset, customName?: string): InsurancePolicy {
+  if (preset === 'iapos') {
+    return {
+      displayName: 'IAPOS',
+      perSessionAmount: 6000,
+      stampAmount: 5000,
+      requirements: [
+        'Debe presentar 3 bonos por sesión.',
+        'Estampillado único: $5.000.',
+        'Plus por sesión: $6.000.',
+      ],
+    }
+  }
+
+  if (preset === 'swiss_medical') {
+    return {
+      displayName: 'SWISS MEDICAL',
+      perSessionAmount: 4000,
+      stampAmount: 5000,
+      requirements: [
+        'Debe presentar orden médica vigente.',
+        'Estampillado único: $5.000.',
+        'Plus por sesión: $4.000.',
+      ],
+    }
+  }
+
+  return {
+    displayName: (customName || 'Otra obra social').trim(),
+    perSessionAmount: 3000,
+    stampAmount: 5000,
+    requirements: [
+      'Debe presentar orden médica vigente.',
+      'Estampillado único: $5.000.',
+      'Plus por sesión: $3.000.',
+    ],
+  }
 }
 
 function getDaysInMonth(year: number, month: number) {
@@ -98,6 +151,27 @@ function getProfessionalName(row: AvailabilityRow) {
     : "Profesional disponible"
 }
 
+function getSlotCapacityByTime(slotTime: string) {
+  const minutes = timeToMinutes(slotTime)
+  const noonStart = 12 * 60
+  const afternoonEnd = 16 * 60
+
+  if (minutes >= noonStart && minutes < afternoonEnd) {
+    return 1
+  }
+
+  const minuteOfHour = minutes % 60
+  if (minuteOfHour === 0) {
+    return 3
+  }
+
+  if (minuteOfHour === 30) {
+    return 2
+  }
+
+  return 0
+}
+
 function buildSlotOptions(
   rows: AvailabilityRow[],
   bookedTurnos: Array<{ hora: string; usuario_id: string | null }>
@@ -129,13 +203,17 @@ function buildSlotOptions(
       if (existingSlot) {
         if (!existingSlot.professionals.some((professional) => professional.id === row.usuario_id)) {
           existingSlot.professionals.push({ id: row.usuario_id, name: professionalName })
-          existingSlot.capacity += 1
         }
       } else {
+        const capacity = getSlotCapacityByTime(slotTime)
+        if (capacity === 0) {
+          continue
+        }
+
         slotMap.set(slotTime, {
           time: slotTime,
-          capacity: 1,
-          remaining: 1,
+          capacity,
+          remaining: capacity,
           professionals: [{ id: row.usuario_id, name: professionalName }],
         })
       }
@@ -146,10 +224,7 @@ function buildSlotOptions(
     .map((slot) => ({
       ...slot,
       remaining: Math.max(0, slot.capacity - (bookedCountByTime.get(slot.time) || 0)),
-      professionals: slot.professionals.filter((professional) => {
-        const bookedSet = bookedProfessionalIdsByTime.get(slot.time)
-        return !bookedSet?.has(professional.id)
-      }),
+      professionals: slot.professionals,
     }))
     .sort((first, second) => timeToMinutes(first.time) - timeToMinutes(second.time))
 }
@@ -161,10 +236,12 @@ export function Booking() {
   const [selectedService, setSelectedService] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [selectedTime, setSelectedTime] = useState<string | null>(null)
+  const [selectedTreatmentSessions, setSelectedTreatmentSessions] = useState<SelectedSession[]>([])
   const [availableSlots, setAvailableSlots] = useState<SlotOption[]>([])
   const [isReturningPatient, setIsReturningPatient] = useState<boolean | null>(null)
   const [appointmentMode, setAppointmentMode] = useState<'tratamiento' | 'suelta'>('suelta')
-  const [insuranceName, setInsuranceName] = useState('')
+  const [insurancePreset, setInsurancePreset] = useState<InsurancePreset>('iapos')
+  const [customInsuranceName, setCustomInsuranceName] = useState('')
   const [treatmentSessions, setTreatmentSessions] = useState('10')
   const [medicalOrderFile, setMedicalOrderFile] = useState<File | null>(null)
   const [dni, setDni] = useState('')
@@ -186,16 +263,9 @@ export function Booking() {
 
   const daysInMonth = getDaysInMonth(currentYear, currentMonth)
   const firstDayOfMonth = getFirstDayOfMonth(currentYear, currentMonth)
-
-  const insuranceAdvice = (() => {
-    const normalized = insuranceName.toLowerCase().trim()
-    if (!normalized) return null
-    if (normalized.includes('osde')) return 'OSDE: al presentarte, acercá credencial y orden médica vigente.'
-    if (normalized.includes('iapos')) return 'IAPOS: validaremos cobertura y posibles copagos antes de iniciar sesiones.'
-    if (normalized.includes('pami')) return 'PAMI: deberás presentar derivación y documentación al ingreso.'
-    if (normalized.includes('particular')) return 'Particular: podés avanzar con normalidad y pagar por sesión o plan.'
-    return 'Tu obra social será validada por administración al confirmar la primera sesión.'
-  })()
+  const maxTreatmentSessions = Math.max(1, Number(treatmentSessions || "1"))
+  const insurancePolicy = getInsurancePolicy(insurancePreset, customInsuranceName)
+  const insuranceName = insurancePolicy.displayName
 
   const handlePrevMonth = () => {
     if (currentMonth === 0) {
@@ -287,6 +357,7 @@ export function Booking() {
     if (!selectedService) {
       setSelectedDate(null)
       setSelectedTime(null)
+      setSelectedTreatmentSessions([])
       setAvailableSlots([])
       return
     }
@@ -300,10 +371,40 @@ export function Booking() {
       if (!hasAvailability) {
         setSelectedDate(null)
         setSelectedTime(null)
+        setSelectedTreatmentSessions([])
         setAvailableSlots([])
       }
     }
   }, [selectedService, selectedDate, availabilityRows])
+
+  const addTreatmentSession = () => {
+    if (!selectedDate || !selectedTime) return
+
+    if (selectedTreatmentSessions.length >= maxTreatmentSessions) {
+      setSubmitError(`Ya seleccionaste el máximo de ${maxTreatmentSessions} sesiones.`)
+      return
+    }
+
+    const date = formatLocalDate(selectedDate)
+    const sessionAlreadyExists = selectedTreatmentSessions.some(
+      (session) => session.date === date && session.time === selectedTime
+    )
+
+    if (sessionAlreadyExists) {
+      setSubmitError("Ese horario ya fue agregado a tu plan.")
+      return
+    }
+
+    setSubmitError(null)
+    setSelectedTreatmentSessions((current) => [...current, { date, time: selectedTime }])
+    setSelectedTime(null)
+  }
+
+  const removeTreatmentSession = (sessionToRemove: SelectedSession) => {
+    setSelectedTreatmentSessions((current) =>
+      current.filter((session) => !(session.date === sessionToRemove.date && session.time === sessionToRemove.time))
+    )
+  }
 
   useEffect(() => {
     if (!selectedDate || !selectedService) {
@@ -380,12 +481,23 @@ export function Booking() {
     try {
       const supabase = createClient()
 
-      if (!selectedDate || !selectedTime || !selectedService) {
-        setSubmitError('Completá servicio, fecha y horario antes de confirmar.')
+      if (!selectedService) {
+        setSubmitError('Completá servicio antes de confirmar.')
         return
       }
 
-      if (!insuranceName.trim()) {
+      if (appointmentMode === 'suelta' && (!selectedDate || !selectedTime)) {
+        setSubmitError('Completá fecha y horario antes de confirmar.')
+        return
+      }
+
+      if (appointmentMode === 'tratamiento' && selectedTreatmentSessions.length === 0) {
+        setSubmitError('Seleccioná al menos una sesión para el tratamiento.')
+        setStep(4)
+        return
+      }
+
+      if (insurancePreset === 'otra' && !customInsuranceName.trim()) {
         setSubmitError('Indicá tu obra social antes de continuar.')
         setStep(2)
         return
@@ -407,7 +519,7 @@ export function Booking() {
         ? Math.max(1, Number(treatmentSessions || '1'))
         : 1
 
-      if (appointmentMode === 'tratamiento' && !medicalOrderFile) {
+      if (appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && !medicalOrderFile) {
         setSubmitError('Para iniciar tratamiento debés adjuntar la orden médica.')
         setStep(2)
         return
@@ -421,14 +533,14 @@ export function Booking() {
         }
       }
 
-      const selectedSlot = availableSlots.find((slot) => slot.time === selectedTime)
-      if (!selectedSlot || selectedSlot.remaining <= 0) {
-        setSubmitError('Ese horario ya no tiene disponibilidad. Elegí otro.')
-        setStep(4)
-        return
+      if (appointmentMode === 'suelta') {
+        const selectedSlot = availableSlots.find((slot) => slot.time === selectedTime)
+        if (!selectedSlot || selectedSlot.remaining <= 0) {
+          setSubmitError('Ese horario ya no tiene disponibilidad. Elegí otro.')
+          setStep(4)
+          return
+        }
       }
-
-      const slotTime = `${selectedTime}:00`
 
       let patientId: string | null = null
       const normalizedDni = dni.trim()
@@ -503,52 +615,71 @@ export function Booking() {
         return
       }
 
-      const scheduledDates = Array.from({ length: sessionsRequested }, (_, index) => {
-        const date = new Date(selectedDate)
-        date.setDate(date.getDate() + 7 * index)
-        return formatLocalDate(date)
-      })
+      const requestedSessions: SelectedSession[] = appointmentMode === 'tratamiento'
+        ? selectedTreatmentSessions
+        : [{ date: formatLocalDate(selectedDate as Date), time: selectedTime as string }]
 
-      const assignments: Array<{ fecha: string; usuarioId: string | null }> = []
+      const assignments: Array<{ fecha: string; hora: string; usuarioId: string | null }> = []
 
-      for (const dateStr of scheduledDates) {
+      for (const requestedSession of requestedSessions) {
+        const slotTime = `${requestedSession.time}:00`
+
         const { data: existingTurnos, error: slotError } = await supabase
           .from('turnos')
-          .select('id, usuario_id')
-          .eq('fecha', dateStr)
+          .select('id, hora, usuario_id')
+          .eq('fecha', requestedSession.date)
           .eq('servicio', selectedService)
           .eq('hora', slotTime)
           .neq('estado', 'cancelado')
 
         if (slotError) throw slotError
-        if ((existingTurnos || []).length >= selectedSlot.capacity) {
-          setSubmitError(`No hay cupo para ${dateStr} a las ${selectedTime}. Probá con otro horario.`)
-          return
-        }
 
-        const bookedProfessionalIds = new Set(
-          (existingTurnos || [])
-            .map((turno) => turno.usuario_id)
-            .filter((usuarioId): usuarioId is string => Boolean(usuarioId))
+        const sessionDate = new Date(`${requestedSession.date}T00:00:00`)
+        const dayRows = availabilityRows.filter(
+          (row) => row.servicio === selectedService && row.dia_semana === sessionDate.getDay()
         )
 
-        const assignedProfessional =
-          selectedSlot.professionals.find((professional) => !bookedProfessionalIds.has(professional.id)) ||
-          selectedSlot.professionals[0] ||
-          null
+        const slots = buildSlotOptions(dayRows, (existingTurnos || []) as Array<{ hora: string; usuario_id: string | null }>)
+        const slotForSession = slots.find((slot) => slot.time === requestedSession.time)
 
-        if (!assignedProfessional) {
-          setSubmitError(`No pudimos asignar profesional para ${dateStr}. Probá otro horario.`)
+        if (!slotForSession || slotForSession.remaining <= 0) {
+          setSubmitError(`No hay cupo para ${requestedSession.date} a las ${requestedSession.time}. Probá con otro horario.`)
           return
         }
 
-        assignments.push({ fecha: dateStr, usuarioId: assignedProfessional.id })
+        const bookedCountByProfessional = new Map<string, number>()
+        for (const turno of existingTurnos || []) {
+          if (!turno.usuario_id) continue
+          bookedCountByProfessional.set(
+            turno.usuario_id,
+            (bookedCountByProfessional.get(turno.usuario_id) || 0) + 1
+          )
+        }
+
+        const assignedProfessional =
+          slotForSession.professionals
+            .slice()
+            .sort((a, b) => {
+              const countA = bookedCountByProfessional.get(a.id) || 0
+              const countB = bookedCountByProfessional.get(b.id) || 0
+              if (countA !== countB) return countA - countB
+              return a.name.localeCompare(b.name)
+            })[0] || null
+
+        if (!assignedProfessional) {
+          setSubmitError(`No pudimos asignar profesional para ${requestedSession.date}. Probá otro horario.`)
+          return
+        }
+
+        assignments.push({ fecha: requestedSession.date, hora: slotTime, usuarioId: assignedProfessional.id })
       }
 
       let tratamientoId: string | null = null
 
       if (appointmentMode === 'tratamiento') {
         let orderReference = medicalOrderFile?.name || 'orden_medica'
+        const treatmentPrice = sessionsRequested * insurancePolicy.perSessionAmount
+        const totalDebtWithStamp = treatmentPrice + insurancePolicy.stampAmount
 
         if (medicalOrderFile) {
           const safeFileName = medicalOrderFile.name.replace(/\s+/g, '_')
@@ -564,24 +695,49 @@ export function Booking() {
           }
         }
 
+        const treatmentNotes = insurancePreset === 'iapos'
+          ? `Obra social: ${insuranceName.trim()} | Bonos: 3 por sesión | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único) | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
+          : `Obra social: ${insuranceName.trim()} | Orden: ${orderReference} | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único) | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
+
         const { data: createdTreatment, error: treatmentError } = await supabase
           .from('tratamientos')
           .insert({
             paciente_id: patientId,
             servicio: selectedService,
-            tipo_plan: 'orden',
+            tipo_plan: insurancePreset === 'iapos' ? 'bonos' : 'orden',
             sesiones_totales: sessionsRequested,
             sesiones_realizadas: 0,
-            precio_total: 0,
+            precio_total: totalDebtWithStamp,
             monto_pagado: 0,
             estado: 'activo',
-            notas: `Obra social: ${insuranceName.trim()} | Orden: ${orderReference}`,
+            notas: treatmentNotes,
           })
           .select('id')
           .single()
 
         if (treatmentError) throw treatmentError
         tratamientoId = createdTreatment.id
+
+        const { data: existingBalance, error: balanceError } = await supabase
+          .from('saldo_paciente')
+          .select('saldo_deuda, sesiones_pendientes')
+          .eq('paciente_id', patientId)
+          .maybeSingle()
+
+        if (balanceError) throw balanceError
+
+        const currentDebt = Number(existingBalance?.saldo_deuda || 0)
+        const currentPendingSessions = Number(existingBalance?.sesiones_pendientes || 0)
+
+        const { error: upsertBalanceError } = await supabase
+          .from('saldo_paciente')
+          .upsert({
+            paciente_id: patientId,
+            saldo_deuda: currentDebt + totalDebtWithStamp,
+            sesiones_pendientes: currentPendingSessions + sessionsRequested,
+          }, { onConflict: 'paciente_id' })
+
+        if (upsertBalanceError) throw upsertBalanceError
       }
 
       for (let index = 0; index < assignments.length; index += 1) {
@@ -593,7 +749,7 @@ export function Booking() {
           numero_sesion: appointmentMode === 'tratamiento' ? index + 1 : null,
           servicio: selectedService,
           fecha: assignment.fecha,
-          hora: slotTime,
+          hora: assignment.hora,
           estado: 'pendiente',
         }
 
@@ -628,7 +784,7 @@ export function Booking() {
             <h2 className="font-serif text-4xl md:text-5xl mb-4">¡Turno reservado!</h2>
             <p className="text-muted-foreground text-lg mb-8">
               {appointmentMode === 'tratamiento'
-                ? `Se generaron ${createdSessionsCount} sesiones semanales en el mismo horario.`
+                ? `Se registraron ${createdSessionsCount} sesiones para tu plan de tratamiento.`
                 : 'Se registró tu sesión suelta correctamente.'}
             </p>
             <div className="bg-card border border-border rounded-lg p-6 text-left mb-8">
@@ -637,18 +793,44 @@ export function Booking() {
                   <span className="text-muted-foreground">Servicio</span>
                   <span className="font-medium">{services.find(s => s.id === selectedService)?.name}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Fecha</span>
-                  <span className="font-medium">{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Hora</span>
-                  <span className="font-medium">{selectedTime} hs</span>
-                </div>
+                {appointmentMode !== 'tratamiento' && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Fecha</span>
+                      <span className="font-medium">{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Hora</span>
+                      <span className="font-medium">{selectedTime} hs</span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Modalidad</span>
-                  <span className="font-medium">{appointmentMode === 'tratamiento' ? 'Tratamiento' : 'Sesión suelta'}</span>
+                  <span className="font-medium">{appointmentMode === 'tratamiento' ? `Tratamiento — ${createdSessionsCount} sesiones` : 'Sesión suelta'}</span>
                 </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Obra social</span>
+                  <span className="font-medium">{insuranceName}</span>
+                </div>
+                <hr className="border-border" />
+                <p className="text-sm font-medium text-muted-foreground">Requisitos para tu obra social</p>
+                <ul className="text-sm space-y-1">
+                  {getInsurancePolicy(insurancePreset, customInsuranceName).requirements.map((req) => (
+                    <li key={req} className="flex gap-2">
+                      <span className="text-primary font-bold">•</span>
+                      <span>{req}</span>
+                    </li>
+                  ))}
+                </ul>
+                {appointmentMode === 'tratamiento' && (
+                  <div className="mt-2 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                    <p className="text-sm font-medium">Deuda registrada en tu cuenta corriente</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {createdSessionsCount} sesión{createdSessionsCount !== 1 ? 'es' : ''} × ${getInsurancePolicy(insurancePreset, customInsuranceName).perSessionAmount.toLocaleString()} + estampillado ${getInsurancePolicy(insurancePreset, customInsuranceName).stampAmount.toLocaleString()} = <strong>${(createdSessionsCount * getInsurancePolicy(insurancePreset, customInsuranceName).perSessionAmount + getInsurancePolicy(insurancePreset, customInsuranceName).stampAmount).toLocaleString()}</strong>
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
             <Button 
@@ -658,9 +840,11 @@ export function Booking() {
                 setSelectedService(null)
                 setSelectedDate(null)
                 setSelectedTime(null)
+                setSelectedTreatmentSessions([])
                 setIsReturningPatient(null)
                 setAppointmentMode('suelta')
-                setInsuranceName('')
+                setInsurancePreset('iapos')
+                setCustomInsuranceName('')
                 setTreatmentSessions('10')
                 setMedicalOrderFile(null)
                 setDni('')
@@ -733,6 +917,7 @@ export function Booking() {
                     setSelectedService(service.id)
                     setSelectedDate(null)
                     setSelectedTime(null)
+                    setSelectedTreatmentSessions([])
                     setSubmitError(null)
                   }}
                   className={`w-full p-6 rounded-lg border text-left transition-all ${
@@ -780,7 +965,11 @@ export function Booking() {
               <div className="grid sm:grid-cols-2 gap-3 mb-5">
                 <button
                   type="button"
-                  onClick={() => setAppointmentMode('tratamiento')}
+                  onClick={() => {
+                    setAppointmentMode('tratamiento')
+                    setSelectedTime(null)
+                    setSubmitError(null)
+                  }}
                   className={`p-4 rounded-lg border text-left ${appointmentMode === 'tratamiento' ? 'border-primary bg-primary/5' : 'border-border'}`}
                 >
                   <p className="font-medium">Iniciar tratamiento</p>
@@ -788,7 +977,11 @@ export function Booking() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAppointmentMode('suelta')}
+                  onClick={() => {
+                    setAppointmentMode('suelta')
+                    setSelectedTreatmentSessions([])
+                    setSubmitError(null)
+                  }}
                   className={`p-4 rounded-lg border text-left ${appointmentMode === 'suelta' ? 'border-primary bg-primary/5' : 'border-border'}`}
                 >
                   <p className="font-medium">Sesión suelta</p>
@@ -798,17 +991,49 @@ export function Booking() {
 
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-2">Obra social</label>
-                <input
-                  type="text"
-                  required
-                  value={insuranceName}
-                  onChange={(e) => setInsuranceName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="Ej: OSDE, IAPOS, Particular"
-                />
-                {insuranceAdvice ? (
-                  <p className="text-xs text-muted-foreground mt-2">{insuranceAdvice}</p>
+                <div className="grid sm:grid-cols-3 gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => setInsurancePreset('iapos')}
+                    className={`px-4 py-3 rounded-lg border text-left ${insurancePreset === 'iapos' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                  >
+                    IAPOS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInsurancePreset('swiss_medical')}
+                    className={`px-4 py-3 rounded-lg border text-left ${insurancePreset === 'swiss_medical' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                  >
+                    SWISS MEDICAL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInsurancePreset('otra')}
+                    className={`px-4 py-3 rounded-lg border text-left ${insurancePreset === 'otra' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                  >
+                    Otra
+                  </button>
+                </div>
+
+                {insurancePreset === 'otra' ? (
+                  <input
+                    type="text"
+                    required
+                    value={customInsuranceName}
+                    onChange={(e) => setCustomInsuranceName(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder="Escribí tu obra social"
+                  />
                 ) : null}
+
+                <div className="mt-3 p-3 rounded-lg border border-border bg-secondary/30">
+                  <p className="text-sm font-medium mb-2">Información para {insuranceName}</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    {insurancePolicy.requirements.map((item) => (
+                      <li key={item}>• {item}</li>
+                    ))}
+                  </ul>
+                </div>
               </div>
 
               {appointmentMode === 'tratamiento' && (
@@ -824,6 +1049,7 @@ export function Booking() {
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                   </div>
+                  {insurancePreset !== 'iapos' ? (
                   <div>
                     <label className="block text-sm font-medium mb-2">Orden médica (archivo)</label>
                     <input
@@ -833,9 +1059,17 @@ export function Booking() {
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background"
                     />
                     <p className="text-xs text-muted-foreground mt-2">
-                      Se tomarán sesiones semanales en el mismo día y horario seleccionado.
+                      Podés seleccionar manualmente las sesiones en la agenda (hasta el máximo indicado).
                     </p>
                   </div>
+                  ) : (
+                    <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+                      <p className="text-sm font-medium text-primary">IAPOS: no se requiere orden médica</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Debés traer <strong>3 bonos por cada sesión</strong>. No es necesario adjuntar ningún archivo.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -845,7 +1079,11 @@ export function Booking() {
                 </Button>
                 <Button 
                   className="flex-1"
-                  disabled={!insuranceName.trim() || (appointmentMode === 'tratamiento' && (!medicalOrderFile || Number(treatmentSessions || '0') <= 0))}
+                  disabled={
+                    (insurancePreset === 'otra' && !customInsuranceName.trim()) ||
+                    (appointmentMode === 'tratamiento' && Number(treatmentSessions || '0') <= 0) ||
+                    (appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && !medicalOrderFile)
+                  }
                   onClick={() => {
                     setSubmitError(null)
                     setStep(3)
@@ -895,7 +1133,11 @@ export function Booking() {
                     <button
                       key={day}
                       disabled={disabled}
-                      onClick={() => setSelectedDate(new Date(currentYear, currentMonth, day))}
+                      onClick={() => {
+                        setSelectedDate(new Date(currentYear, currentMonth, day))
+                        setSelectedTime(null)
+                        setSubmitError(null)
+                      }}
                       className={`aspect-square rounded-lg text-sm font-medium transition-colors ${
                         isSelected
                           ? 'bg-primary text-primary-foreground'
@@ -973,9 +1215,49 @@ export function Booking() {
                 })}
               </div>
 
+              {appointmentMode === 'tratamiento' && (
+                <div className="mb-6 p-4 border border-border rounded-lg bg-secondary/20">
+                  <div className="flex items-center justify-between gap-4 mb-3">
+                    <p className="text-sm">
+                      Sesiones seleccionadas: <span className="font-medium">{selectedTreatmentSessions.length}</span> / {maxTreatmentSessions}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={addTreatmentSession}
+                      disabled={!selectedDate || !selectedTime || selectedTreatmentSessions.length >= maxTreatmentSessions}
+                    >
+                      Agregar sesión
+                    </Button>
+                  </div>
+
+                  {selectedTreatmentSessions.length > 0 ? (
+                    <div className="space-y-2">
+                      {selectedTreatmentSessions
+                        .slice()
+                        .sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`))
+                        .map((session) => (
+                          <div key={`${session.date}-${session.time}`} className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-sm">
+                            <span>{session.date} - {session.time} hs</span>
+                            <button
+                              type="button"
+                              onClick={() => removeTreatmentSession(session)}
+                              className="text-xs text-destructive hover:underline"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Todavía no agregaste sesiones al plan.</p>
+                  )}
+                </div>
+              )}
+
               <p className="text-sm text-muted-foreground mb-6 p-4 bg-muted rounded-lg">
                 {appointmentMode === 'tratamiento'
-                  ? 'Si elegís tratamiento, se intentará reservar la misma franja horaria semanal durante todas las sesiones.'
+                  ? 'Podés agregar sesiones en cualquier fecha y horario disponible, hasta el máximo indicado en tu plan.'
                   : 'Los cupos salen de la agenda configurada en Supabase y se asignan según disponibilidad real.'}
               </p>
 
@@ -983,7 +1265,7 @@ export function Booking() {
                 <Button variant="outline" onClick={() => setStep(3)}>Volver</Button>
                 <Button
                   className="flex-1"
-                  disabled={!selectedTime || isLoadingAvailability}
+                  disabled={appointmentMode === 'tratamiento' ? selectedTreatmentSessions.length === 0 : (!selectedTime || isLoadingAvailability)}
                   onClick={() => setStep(5)}
                 >
                   Continuar
@@ -999,8 +1281,17 @@ export function Booking() {
                 <h4 className="font-medium mb-2">Resumen de tu turno</h4>
                 <div className="text-sm text-muted-foreground space-y-1">
                   <p>{services.find(s => s.id === selectedService)?.name}</p>
-                  <p>{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })} a las {selectedTime} hs</p>
-                  <p>Modalidad: {appointmentMode === 'tratamiento' ? `Tratamiento (${Math.max(1, Number(treatmentSessions || '1'))} sesiones)` : 'Sesión suelta'}</p>
+                  {appointmentMode === 'tratamiento' ? (
+                    <p>Sesiones elegidas: {selectedTreatmentSessions.length}</p>
+                  ) : (
+                    <p>{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })} a las {selectedTime} hs</p>
+                  )}
+                  {appointmentMode === 'tratamiento' ? (
+                    <p>Modalidad: Tratamiento ({selectedTreatmentSessions.length} seleccionadas de {maxTreatmentSessions})</p>
+                  ) : (
+                    <p>Modalidad: Sesión suelta</p>
+                  )}
+                  <p>Condiciones: estampillado único ${insurancePolicy.stampAmount.toLocaleString()} y plus por sesión ${insurancePolicy.perSessionAmount.toLocaleString()}</p>
                   <p>Obra social: {insuranceName || 'No informada'}</p>
                 </div>
               </div>

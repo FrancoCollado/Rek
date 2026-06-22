@@ -26,6 +26,7 @@ interface CajaEntry {
 
 export default function AdminCaja() {
   const [entries, setEntries] = useState<CajaEntry[]>([])
+  const [searchTerm, setSearchTerm] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +56,19 @@ export default function AdminCaja() {
     [entries]
   )
   const saldo = totalIngresos - totalEgresos
+
+  const filteredEntries = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase()
+    if (!query) return entries
+
+    return entries.filter((entry) => {
+      const typeLabel = entry.type === 'ingreso' ? 'ingreso' : 'egreso'
+      return [entry.date, entry.description, entry.category, typeLabel]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    })
+  }, [entries, searchTerm])
 
   useEffect(() => {
     fetchEntries()
@@ -304,6 +318,13 @@ export default function AdminCaja() {
 
       {/* Movements Table */}
       <Card className="overflow-hidden">
+        <div className="p-4 border-b border-border bg-card">
+          <Input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar por fecha, descripción, categoría o tipo..."
+          />
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-secondary border-b border-border">
@@ -323,14 +344,14 @@ export default function AdminCaja() {
                     Cargando movimientos...
                   </td>
                 </tr>
-              ) : entries.length === 0 ? (
+              ) : filteredEntries.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
-                    No hay movimientos registrados
+                    {searchTerm.trim() ? 'No hay resultados para la búsqueda' : 'No hay movimientos registrados'}
                   </td>
                 </tr>
               ) : (
-                entries.map((entry) => (
+                filteredEntries.map((entry) => (
                   <tr key={entry.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                     <td className="px-6 py-3">{entry.date}</td>
                     <td className="px-6 py-3">{entry.description}</td>

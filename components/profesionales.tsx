@@ -5,7 +5,7 @@ const profesionales = [
     nombre: "Busso Franco",
     titulo: "Licenciado en Kinesiología y Fisiatría",
     matricula: "MAT 1610/2",
-    especialidades: ["Terapia Manual ONM", "RPG", "Kinesiología Deportiva", "MEP"],
+    especialidades: ["Terapia Manual ONM", "Rehabilitación vestibular", "Kinesiología Deportiva"],
     desde: "2014",
     foto: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-WR6hN46glSc94sqSogqkS0Va3Eicyv.png"
   },
@@ -13,7 +13,7 @@ const profesionales = [
     nombre: "Grigioni Juan Manuel",
     titulo: "Licenciado en Kinesiología y Fisiatría",
     matricula: "MAT 1556/2",
-    especialidades: ["Terapia Manual ONM", "RPG", "Rehabilitación Vestibular", "MEP"],
+    especialidades: ["Terapia Manual ONM", "RPG", "Kinesiología Deportiva"],
     desde: "2014",
     foto: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-dMFbQ3kYUtpQHyFvCaYDLDSvVOzZzB.png"
   }

@@ -1,10 +1,11 @@
 -- ============================================================
--- SEED: servicios configurados para booking (lunes a viernes)
+-- SEED: servicios configurados para booking (lunes a sabado)
 -- ============================================================
 -- Objetivo:
 -- 1) Asegurar profesionales activos (rol = kinesiologo)
--- 2) Cargar disponibilidad_profesional en dias habiles (1..5)
--- 3) Evitar duplicados (script idempotente)
+-- 2) Configurar disponibilidad: lunes a viernes 07:00-20:00, sabado 09:00-13:00
+-- 3) Agenda en bloques de 30 minutos
+-- 4) Script idempotente
 
 BEGIN;
 
@@ -23,7 +24,13 @@ DO UPDATE SET
   activo = TRUE,
   updated_at = CURRENT_TIMESTAMP;
 
--- 2) Disponibilidad para kinesiologia (manana y tarde) y traumatologia
+-- 2) Reiniciar disponibilidad previa de kinesiologos para aplicar la nueva grilla
+DELETE FROM disponibilidad_profesional dp
+USING usuarios u
+WHERE dp.usuario_id = u.id
+  AND u.rol = 'kinesiologo';
+
+-- 3) Disponibilidad para kinesiologia y traumatologia
 INSERT INTO disponibilidad_profesional (
   usuario_id,
   servicio,
@@ -38,30 +45,28 @@ SELECT
   u.id,
   s.servicio,
   d.dia_semana,
-  s.hora_inicio,
-  s.hora_fin,
+  d.hora_inicio,
+  d.hora_fin,
   30,
-  45,
+  30,
   TRUE
 FROM usuarios u
 CROSS JOIN (
   VALUES
-    ('kinesiologia'::text, '08:00'::time, '12:00'::time),
-    ('kinesiologia'::text, '14:00'::time, '19:00'::time),
-    ('traumatologia'::text, '09:00'::time, '13:00'::time)
-) AS s(servicio, hora_inicio, hora_fin)
-CROSS JOIN generate_series(1, 5) AS d(dia_semana) -- 1=lunes ... 5=viernes
+    ('kinesiologia'::text),
+    ('traumatologia'::text)
+) AS s(servicio)
+CROSS JOIN (
+  VALUES
+    (1, '07:00'::time, '20:00'::time),
+    (2, '07:00'::time, '20:00'::time),
+    (3, '07:00'::time, '20:00'::time),
+    (4, '07:00'::time, '20:00'::time),
+    (5, '07:00'::time, '20:00'::time),
+    (6, '09:00'::time, '13:00'::time)
+) AS d(dia_semana, hora_inicio, hora_fin) -- 1=lunes ... 6=sabado
 WHERE u.rol = 'kinesiologo'
-  AND u.activo = TRUE
-  AND NOT EXISTS (
-    SELECT 1
-    FROM disponibilidad_profesional dp
-    WHERE dp.usuario_id = u.id
-      AND dp.servicio = s.servicio
-      AND dp.dia_semana = d.dia_semana
-      AND dp.hora_inicio = s.hora_inicio
-      AND dp.hora_fin = s.hora_fin
-  );
+  AND u.activo = TRUE;
 
 COMMIT;
 

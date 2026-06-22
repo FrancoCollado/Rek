@@ -50,7 +50,6 @@ export function ServicesSection() {
             <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> Terapia Manual ONM</li>
             <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> RPG (Reeducación Postural Global)</li>
             <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> Terapia Vestibular</li>
-            <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> MEP (Microelectrolisis Percutánea)</li>
           </ul>
         </div>
       </div>

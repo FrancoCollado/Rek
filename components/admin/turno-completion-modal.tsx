@@ -37,9 +37,22 @@ export default function TurnoCompletionModal({
   turno,
   onComplete,
 }: TurnoCompletionModalProps) {
+  const normalizeBoolean = (value: unknown, fallback = false) => {
+    if (value === true || value === false) return value
+    if (typeof value === 'string') {
+      const normalized = value.toLowerCase().trim()
+      if (normalized === 'true') return true
+      if (normalized === 'false') return false
+    }
+    if (typeof value === 'number') {
+      if (value === 1) return true
+      if (value === 0) return false
+    }
+    return fallback
+  }
+
   const [asistido, setAsistido] = useState(true)
   const [cobrado, setCobrado] = useState(true)
-  const [pagado, setPagado] = useState(true)
   const [usarImporte, setUsarImporte] = useState(false)
   const [importeDescuento, setImporteDescuento] = useState('')
   const [loading, setLoading] = useState(false)
@@ -48,9 +61,16 @@ export default function TurnoCompletionModal({
 
   useEffect(() => {
     if (open && turno) {
-      setAsistido(true)
-      setCobrado(true)
-      setPagado(true)
+      const estado = String(turno.estado || '').trim().toLowerCase()
+      const isCompleted = estado === 'realizado' || estado === 'completado'
+
+      if (isCompleted) {
+        setAsistido(normalizeBoolean(turno.asistido, true))
+        setCobrado(normalizeBoolean(turno.cobrado, true))
+      } else {
+        setAsistido(true)
+        setCobrado(true)
+      }
       setUsarImporte(false)
       setImporteDescuento('')
       fetchPatientBalance()
@@ -104,11 +124,11 @@ export default function TurnoCompletionModal({
     try {
       const supabase = createClient()
       const isMarkedAsCharged = cobrado
-      const isPaidNow = cobrado && pagado
+      const isPaidNow = cobrado
       const descuentoCuentaCorriente = usarImporte
         ? Math.max(0, Number.parseFloat(importeDescuento || '0'))
         : 0
-      const deudaGeneradaEnTurno = asistido && isMarkedAsCharged && !isPaidNow ? SESSION_AMOUNT : 0
+      const deudaGeneradaEnTurno = 0
       const pagoAplicado = (isPaidNow ? SESSION_AMOUNT : 0) + descuentoCuentaCorriente
 
       await supabase
@@ -210,7 +230,7 @@ export default function TurnoCompletionModal({
         <DialogHeader>
           <DialogTitle>Completar turno</DialogTitle>
           <DialogDescription>
-            Si marcás Cobrado y Pagado se registra ingreso en caja. Si marcás solo Cobrado, se suma a la cuenta corriente.
+            Al guardar, el turno queda como realizado y se registran los cambios en asistido/cobrado.
           </DialogDescription>
         </DialogHeader>
 
@@ -251,26 +271,11 @@ export default function TurnoCompletionModal({
                   type="checkbox"
                   checked={cobrado}
                   onChange={(e) => {
-                    const checked = e.target.checked
-                    setCobrado(checked)
-                    if (!checked) {
-                      setPagado(false)
-                    }
+                    setCobrado(e.target.checked)
                   }}
                   className="w-4 h-4"
                 />
                 <span className="text-sm font-medium">Cobrado $6.000</span>
-              </label>
-
-              <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
-                <input
-                  type="checkbox"
-                  checked={pagado}
-                  onChange={(e) => setPagado(e.target.checked)}
-                  disabled={!cobrado}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm font-medium">Pagado</span>
               </label>
             </div>
 
