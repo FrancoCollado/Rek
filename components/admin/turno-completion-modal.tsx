@@ -124,19 +124,20 @@ export default function TurnoCompletionModal({
     try {
       const supabase = createClient()
       const isMarkedAsCharged = cobrado
-      const isPaidNow = cobrado
       const descuentoCuentaCorriente = usarImporte
         ? Math.max(0, Number.parseFloat(importeDescuento || '0'))
         : 0
+      // Solo aplicar descuento cuando el usuario especifica un importe
+      // No restar de la deuda cuando simplemente marca "cobrado"
+      const pagoAplicado = descuentoCuentaCorriente
       const deudaGeneradaEnTurno = 0
-      const pagoAplicado = (isPaidNow ? SESSION_AMOUNT : 0) + descuentoCuentaCorriente
 
       await supabase
         .from('turnos')
         .update({
           asistido,
           cobrado: isMarkedAsCharged,
-          monto_pagado: isPaidNow ? SESSION_AMOUNT : null,
+          monto_pagado: usarImporte && descuentoCuentaCorriente > 0 ? descuentoCuentaCorriente : null,
           estado: 'realizado',
         })
         .eq('id', turno.id)
@@ -186,34 +187,6 @@ export default function TurnoCompletionModal({
         }, {
           onConflict: 'paciente_id'
         })
-
-      if (isPaidNow) {
-        await supabase
-          .from('movimientos_caja')
-          .insert({
-            tipo: 'ingreso',
-            categoria: turno.service || 'Turnos',
-            monto: SESSION_AMOUNT,
-            descripcion: `Pago sesión ${turno.patient || 'paciente'}`,
-            turno_id: turno.id,
-            paciente_id: turno.paciente_id,
-            fecha: new Date().toISOString().split('T')[0],
-          })
-      }
-
-      if (descuentoCuentaCorriente > 0) {
-        await supabase
-          .from('movimientos_caja')
-          .insert({
-            tipo: 'ingreso',
-            categoria: 'Cuenta corriente',
-            monto: descuentoCuentaCorriente,
-            descripcion: `Pago cuenta corriente ${turno.patient || 'paciente'}`,
-            turno_id: turno.id,
-            paciente_id: turno.paciente_id,
-            fecha: new Date().toISOString().split('T')[0],
-          })
-      }
 
       onOpenChange(false)
       onComplete()

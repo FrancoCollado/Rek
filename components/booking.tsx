@@ -315,7 +315,9 @@ export function Booking() {
           .order('dia_semana')
           .order('hora_inicio')
 
-        if (error) throw error
+        if (error) {
+          throw new Error(`[Config] ${error.message || 'Error al cargar disponibilidad'}`)
+        }
         if (!isActive) return
 
         const rows = (data || []) as unknown as AvailabilityRow[]
@@ -440,7 +442,9 @@ export function Booking() {
           .eq('servicio', selectedService)
           .neq('estado', 'cancelado')
 
-        if (error) throw error
+        if (error) {
+          throw new Error(`[Slots] ${error.message || 'Error al cargar horarios disponibles'}`)
+        }
         if (!isActive) return
 
         const slots = buildSlotOptions(dayRows, (data || []) as Array<{ hora: string; usuario_id: string | null }>)
@@ -552,7 +556,9 @@ export function Booking() {
           .eq('dni', normalizedDni)
           .maybeSingle()
 
-        if (existingPatientError) throw existingPatientError
+        if (existingPatientError) {
+          throw new Error(`[Búsqueda Paciente Existente] ${existingPatientError.message || 'Error al buscar paciente'}`)
+        }
         if (!existingPatient) {
           setSubmitError('No encontramos un paciente con ese DNI. Verificá el dato o elegí "No" para registrarte.')
           return
@@ -577,7 +583,9 @@ export function Booking() {
           .eq('dni', normalizedDni)
           .maybeSingle()
 
-        if (patientByDniError) throw patientByDniError
+        if (patientByDniError) {
+          throw new Error(`[Búsqueda Paciente DNI] ${patientByDniError.message || 'Error al buscar paciente por DNI'}`)
+        }
 
         if (patientByDni) {
           patientId = patientByDni.id
@@ -605,7 +613,9 @@ export function Booking() {
             .select('id')
             .single()
 
-          if (createPatientError) throw createPatientError
+          if (createPatientError) {
+            throw new Error(`[Crear Paciente] ${createPatientError.message || 'Error al crear paciente'}`)
+          }
           patientId = pacientesData.id
         }
       }
@@ -632,7 +642,9 @@ export function Booking() {
           .eq('hora', slotTime)
           .neq('estado', 'cancelado')
 
-        if (slotError) throw slotError
+        if (slotError) {
+          throw new Error(`[Slot ${requestedSession.date} ${requestedSession.time}] ${slotError.message || 'Error al cargar turnos'}`)
+        }
 
         const sessionDate = new Date(`${requestedSession.date}T00:00:00`)
         const dayRows = availabilityRows.filter(
@@ -704,7 +716,7 @@ export function Booking() {
           .insert({
             paciente_id: patientId,
             servicio: selectedService,
-            tipo_plan: insurancePreset === 'iapos' ? 'bonos' : 'orden',
+            tipo_plan: insurancePreset === 'iapos' ? 'libre' : 'orden',
             sesiones_totales: sessionsRequested,
             sesiones_realizadas: 0,
             precio_total: totalDebtWithStamp,
@@ -715,7 +727,9 @@ export function Booking() {
           .select('id')
           .single()
 
-        if (treatmentError) throw treatmentError
+        if (treatmentError) {
+          throw new Error(`[Tratamiento] ${treatmentError.message || 'Error al crear tratamiento'}`)
+        }
         tratamientoId = createdTreatment.id
 
         const { data: existingBalance, error: balanceError } = await supabase
@@ -724,7 +738,9 @@ export function Booking() {
           .eq('paciente_id', patientId)
           .maybeSingle()
 
-        if (balanceError) throw balanceError
+        if (balanceError) {
+          throw new Error(`[Saldo] ${balanceError.message || 'Error al cargar saldo'}`)
+        }
 
         const currentDebt = Number(existingBalance?.saldo_deuda || 0)
         const currentPendingSessions = Number(existingBalance?.sesiones_pendientes || 0)
@@ -737,7 +753,9 @@ export function Booking() {
             sesiones_pendientes: currentPendingSessions + sessionsRequested,
           }, { onConflict: 'paciente_id' })
 
-        if (upsertBalanceError) throw upsertBalanceError
+        if (upsertBalanceError) {
+          throw new Error(`[Upsert Saldo] ${upsertBalanceError.message || 'Error al actualizar saldo'}`)
+        }
       }
 
       for (let index = 0; index < assignments.length; index += 1) {
@@ -758,7 +776,8 @@ export function Booking() {
         // Si la base tiene una regla de unicidad para evitar duplicados,
         // no cortamos el flujo cuando el turno ya existe.
         if (insertTurnoError && insertTurnoError.code !== '23505') {
-          throw insertTurnoError
+          const errorMsg = insertTurnoError.message || 'Error desconocido al insertar turno'
+          throw new Error(`[Turno ${index + 1}] ${errorMsg}`)
         }
       }
 
@@ -766,6 +785,17 @@ export function Booking() {
       setIsSubmitted(true)
     } catch (error) {
       console.error('[v0] Error creating booking:', error)
+      
+      // Better error logging
+      if (error instanceof Error) {
+        console.error('Error message:', error.message)
+        console.error('Error stack:', error.stack)
+      } else if (typeof error === 'object' && error !== null) {
+        console.error('Error object:', JSON.stringify(error, null, 2))
+      } else {
+        console.error('Unknown error type:', typeof error, error)
+      }
+      
       setSubmitError('No se pudo completar la reserva. Revisá la configuracion de agenda y volvé a intentar.')
     } finally {
       submitLockRef.current = false
@@ -1086,6 +1116,9 @@ export function Booking() {
                   }
                   onClick={() => {
                     setSubmitError(null)
+                    setSelectedTreatmentSessions([])
+                    setSelectedDate(null)
+                    setSelectedTime(null)
                     setStep(3)
                   }}
                 >
@@ -1095,75 +1128,260 @@ export function Booking() {
             </div>
           )}
 
-          {/* Step 3: Date Selection */}
+          {/* Step 3: Date Selection (Suelta) or Unified Date+Time (Tratamiento) */}
           {step === 3 && (
             <div className="bg-card border border-border rounded-lg p-6">
-              <div className="flex items-center justify-between mb-6">
-                <button onClick={handlePrevMonth} className="p-2 hover:bg-secondary rounded-lg">
-                  <ChevronLeft className="w-5 h-5" />
-                </button>
-                <h3 className="font-serif text-xl">
-                  {monthNames[currentMonth]} {currentYear}
-                </h3>
-                <button onClick={handleNextMonth} className="p-2 hover:bg-secondary rounded-lg">
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              </div>
+              {appointmentMode === 'tratamiento' ? (
+                /* UNIFIED VIEW FOR TRATAMIENTO: Calendar + Times + Sessions */
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Left: Calendar */}
+                  <div className="lg:col-span-1">
+                    <div className="flex items-center justify-between mb-6">
+                      <button onClick={handlePrevMonth} className="p-2 hover:bg-secondary rounded-lg">
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      <h3 className="font-serif text-lg">
+                        {monthNames[currentMonth]}
+                      </h3>
+                      <button onClick={handleNextMonth} className="p-2 hover:bg-secondary rounded-lg">
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
 
-              <div className="grid grid-cols-7 gap-2 mb-4">
-                {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((day) => (
-                  <div key={day} className="text-center text-xs text-muted-foreground py-2">
-                    {day}
+                    <div className="grid grid-cols-7 gap-1 mb-4">
+                      {['D', 'L', 'M', 'X', 'J', 'V', 'S'].map((day, idx) => (
+                        <div key={`day-${idx}`} className="text-center text-xs text-muted-foreground py-1 font-medium">
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-1">
+                      {Array.from({ length: firstDayOfMonth }).map((_, i) => (
+                        <div key={`empty-${i}`} />
+                      ))}
+                      {Array.from({ length: daysInMonth }).map((_, i) => {
+                        const day = i + 1
+                        const isSelected = selectedDate?.getDate() === day &&
+                          selectedDate?.getMonth() === currentMonth &&
+                          selectedDate?.getFullYear() === currentYear
+                        const disabled = isDateDisabled(day)
+
+                        return (
+                          <button
+                            key={day}
+                            disabled={disabled}
+                            onClick={() => {
+                              setSelectedDate(new Date(currentYear, currentMonth, day))
+                              setSelectedTime(null)
+                              setSubmitError(null)
+                            }}
+                            className={`aspect-square rounded text-xs font-medium transition-colors ${
+                              isSelected
+                                ? 'bg-primary text-primary-foreground'
+                                : disabled
+                                ? 'text-muted-foreground/30 cursor-not-allowed'
+                                : 'hover:bg-secondary'
+                            }`}
+                          >
+                            {day}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-3 leading-snug">
+                      Seleccioná fecha, luego elige horarios.
+                    </p>
                   </div>
-                ))}
-              </div>
 
-              <div className="grid grid-cols-7 gap-2">
-                {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                  <div key={`empty-${i}`} />
-                ))}
-                {Array.from({ length: daysInMonth }).map((_, i) => {
-                  const day = i + 1
-                  const isSelected = selectedDate?.getDate() === day &&
-                    selectedDate?.getMonth() === currentMonth &&
-                    selectedDate?.getFullYear() === currentYear
-                  const disabled = isDateDisabled(day)
+                  {/* Right: Times + Sessions */}
+                  <div className="lg:col-span-2">
+                    {selectedDate ? (
+                      <div className="space-y-4">
+                        <div>
+                          <div className="flex items-center gap-2 mb-3">
+                            <Calendar className="w-4 h-4 text-primary" />
+                            <span className="font-medium text-sm">
+                              {selectedDate.toLocaleDateString('es-AR', { weekday: 'short', day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
 
-                  return (
-                    <button
-                      key={day}
-                      disabled={disabled}
-                      onClick={() => {
-                        setSelectedDate(new Date(currentYear, currentMonth, day))
-                        setSelectedTime(null)
-                        setSubmitError(null)
-                      }}
-                      className={`aspect-square rounded-lg text-sm font-medium transition-colors ${
-                        isSelected
-                          ? 'bg-primary text-primary-foreground'
-                          : disabled
-                          ? 'text-muted-foreground/40 cursor-not-allowed'
-                          : 'hover:bg-secondary'
-                      }`}
-                    >
-                      {day}
+                          <h4 className="text-sm font-medium mb-3">Horarios disponibles</h4>
+                          {isLoadingAvailability && (
+                            <p className="text-xs text-muted-foreground">Cargando...</p>
+                          )}
+                          {availabilityError && (
+                            <p className="text-xs text-destructive">{availabilityError}</p>
+                          )}
+                          {!isLoadingAvailability && availableSlots.length === 0 && !availabilityError && (
+                            <p className="text-xs text-muted-foreground">Sin horarios en esta fecha.</p>
+                          )}
+
+                          {availableSlots.length > 0 && (
+                            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-4">
+                              {availableSlots.map((slot) => {
+                                const isBooked = slot.remaining === 0
+                                const isAlreadyAdded = selectedTreatmentSessions.some(
+                                  (s) => s.date === formatLocalDate(selectedDate) && s.time === slot.time
+                                )
+                                return (
+                                  <button
+                                    key={slot.time}
+                                    disabled={isBooked || isLoadingAvailability}
+                                    onClick={() => setSelectedTime(slot.time)}
+                                    className={`py-2 px-2 rounded text-xs transition-colors ${
+                                      selectedTime === slot.time
+                                        ? 'bg-primary text-primary-foreground'
+                                        : isBooked
+                                        ? 'bg-muted text-muted-foreground cursor-not-allowed line-through'
+                                        : isAlreadyAdded
+                                        ? 'bg-green-500/20 border border-green-500 text-green-700 font-medium'
+                                        : 'bg-secondary hover:bg-secondary/80'
+                                    }`}
+                                    title={isAlreadyAdded ? 'Ya agregada' : ''}
+                                  >
+                                    <div>{slot.time}</div>
+                                    <div className="text-[9px] opacity-70">{slot.remaining}/{slot.capacity}</div>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          {selectedTime && !isLoadingAvailability && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="w-full"
+                              onClick={addTreatmentSession}
+                              disabled={selectedTreatmentSessions.length >= maxTreatmentSessions}
+                            >
+                              + Agregar sesión a las {selectedTime}
+                            </Button>
+                          )}
+                        </div>
+
+                        {/* Sessions List */}
+                        <div className="border-t pt-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <h4 className="text-sm font-medium">Plan de sesiones</h4>
+                            <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-medium">
+                              {selectedTreatmentSessions.length}/{maxTreatmentSessions}
+                            </span>
+                          </div>
+
+                          {selectedTreatmentSessions.length === 0 ? (
+                            <p className="text-xs text-muted-foreground p-3 bg-secondary/30 rounded">
+                              Elegí un horario y agregá sesiones a tu plan.
+                            </p>
+                          ) : (
+                            <div className="space-y-2 max-h-56 overflow-y-auto pr-2">
+                              {selectedTreatmentSessions
+                                .slice()
+                                .sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)
+                                )
+                                .map((session, idx) => (
+                                  <div
+                                    key={`${session.date}-${session.time}`}
+                                    className="flex items-center justify-between rounded border border-border bg-secondary/30 px-3 py-2 text-xs"
+                                  >
+                                    <div>
+                                      <span className="font-semibold text-primary">Ses. {idx + 1}</span>
+                                      <span className="text-muted-foreground ml-2">
+                                        {new Date(`${session.date}T00:00`).toLocaleDateString('es-AR', { weekday: 'short', day: 'numeric', month: 'short' })} {session.time}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeTreatmentSession(session)}
+                                      className="text-destructive hover:bg-destructive/10 px-2 py-1 rounded font-bold"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center h-40 text-center">
+                        <p className="text-sm text-muted-foreground">Seleccioná una fecha en el calendario</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* ORIGINAL CALENDAR VIEW FOR SUELTA */
+                <div>
+                  <div className="flex items-center justify-between mb-6">
+                    <button onClick={handlePrevMonth} className="p-2 hover:bg-secondary rounded-lg">
+                      <ChevronLeft className="w-5 h-5" />
                     </button>
-                  )
-                })}
-              </div>
+                    <h3 className="font-serif text-xl">
+                      {monthNames[currentMonth]} {currentYear}
+                    </h3>
+                    <button onClick={handleNextMonth} className="p-2 hover:bg-secondary rounded-lg">
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
 
-              <p className="text-xs text-muted-foreground mt-4">
-                Solo se habilitan fechas con agenda cargada en Supabase para el servicio seleccionado.
-              </p>
+                  <div className="grid grid-cols-7 gap-2 mb-4">
+                    {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((day) => (
+                      <div key={day} className="text-center text-xs text-muted-foreground py-2">
+                        {day}
+                      </div>
+                    ))}
+                  </div>
 
-              <div className="flex gap-4">
+                  <div className="grid grid-cols-7 gap-2">
+                    {Array.from({ length: firstDayOfMonth }).map((_, i) => (
+                      <div key={`empty-${i}`} />
+                    ))}
+                    {Array.from({ length: daysInMonth }).map((_, i) => {
+                      const day = i + 1
+                      const isSelected = selectedDate?.getDate() === day &&
+                        selectedDate?.getMonth() === currentMonth &&
+                        selectedDate?.getFullYear() === currentYear
+                      const disabled = isDateDisabled(day)
+
+                      return (
+                        <button
+                          key={day}
+                          disabled={disabled}
+                          onClick={() => {
+                            setSelectedDate(new Date(currentYear, currentMonth, day))
+                            setSelectedTime(null)
+                            setSubmitError(null)
+                          }}
+                          className={`aspect-square rounded-lg text-sm font-medium transition-colors ${
+                            isSelected
+                              ? 'bg-primary text-primary-foreground'
+                              : disabled
+                              ? 'text-muted-foreground/40 cursor-not-allowed'
+                              : 'hover:bg-secondary'
+                          }`}
+                        >
+                          {day}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <p className="text-xs text-muted-foreground mt-4">
+                    Solo se habilitan fechas con agenda cargada en Supabase para el servicio seleccionado.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-4 mt-6">
                 <Button variant="outline" onClick={() => setStep(2)}>
                   Volver
                 </Button>
                 <Button 
                   className="flex-1"
-                  disabled={!selectedDate}
-                  onClick={() => setStep(4)}
+                  disabled={appointmentMode === 'tratamiento' ? selectedTreatmentSessions.length === 0 : !selectedDate}
+                  onClick={() => appointmentMode === 'tratamiento' ? setStep(5) : setStep(4)}
                 >
                   Continuar
                 </Button>
@@ -1171,8 +1389,8 @@ export function Booking() {
             </div>
           )}
 
-          {/* Step 4: Time Selection */}
-          {step === 4 && (
+          {/* Step 4: Time Selection (Suelta mode only) */}
+          {step === 4 && appointmentMode === 'suelta' && (
             <div className="bg-card border border-border rounded-lg p-6">
               <div className="flex items-center gap-2 mb-4">
                 <Calendar className="w-5 h-5 text-primary" />
@@ -1215,57 +1433,15 @@ export function Booking() {
                 })}
               </div>
 
-              {appointmentMode === 'tratamiento' && (
-                <div className="mb-6 p-4 border border-border rounded-lg bg-secondary/20">
-                  <div className="flex items-center justify-between gap-4 mb-3">
-                    <p className="text-sm">
-                      Sesiones seleccionadas: <span className="font-medium">{selectedTreatmentSessions.length}</span> / {maxTreatmentSessions}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={addTreatmentSession}
-                      disabled={!selectedDate || !selectedTime || selectedTreatmentSessions.length >= maxTreatmentSessions}
-                    >
-                      Agregar sesión
-                    </Button>
-                  </div>
-
-                  {selectedTreatmentSessions.length > 0 ? (
-                    <div className="space-y-2">
-                      {selectedTreatmentSessions
-                        .slice()
-                        .sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`))
-                        .map((session) => (
-                          <div key={`${session.date}-${session.time}`} className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-sm">
-                            <span>{session.date} - {session.time} hs</span>
-                            <button
-                              type="button"
-                              onClick={() => removeTreatmentSession(session)}
-                              className="text-xs text-destructive hover:underline"
-                            >
-                              Quitar
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">Todavía no agregaste sesiones al plan.</p>
-                  )}
-                </div>
-              )}
-
               <p className="text-sm text-muted-foreground mb-6 p-4 bg-muted rounded-lg">
-                {appointmentMode === 'tratamiento'
-                  ? 'Podés agregar sesiones en cualquier fecha y horario disponible, hasta el máximo indicado en tu plan.'
-                  : 'Los cupos salen de la agenda configurada en Supabase y se asignan según disponibilidad real.'}
+                Los cupos salen de la agenda configurada en Supabase y se asignan según disponibilidad real.
               </p>
 
               <div className="flex gap-4">
                 <Button variant="outline" onClick={() => setStep(3)}>Volver</Button>
                 <Button
                   className="flex-1"
-                  disabled={appointmentMode === 'tratamiento' ? selectedTreatmentSessions.length === 0 : (!selectedTime || isLoadingAvailability)}
+                  disabled={!selectedTime || isLoadingAvailability}
                   onClick={() => setStep(5)}
                 >
                   Continuar
@@ -1282,7 +1458,21 @@ export function Booking() {
                 <div className="text-sm text-muted-foreground space-y-1">
                   <p>{services.find(s => s.id === selectedService)?.name}</p>
                   {appointmentMode === 'tratamiento' ? (
-                    <p>Sesiones elegidas: {selectedTreatmentSessions.length}</p>
+                    <>
+                      <p>Sesiones elegidas: <strong>{selectedTreatmentSessions.length}</strong> de <strong>{maxTreatmentSessions}</strong></p>
+                      {selectedTreatmentSessions.length > 0 && (
+                        <div className="mt-2 space-y-1 text-xs pl-4 border-l-2 border-primary/30">
+                          {selectedTreatmentSessions
+                            .slice()
+                            .sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`))
+                            .map((session, idx) => (
+                              <p key={`${session.date}-${session.time}`}>
+                                Ses. {idx + 1}: {new Date(`${session.date}T00:00`).toLocaleDateString('es-AR', { weekday: 'short', day: 'numeric', month: 'short' })} {session.time} hs
+                              </p>
+                            ))}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <p>{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })} a las {selectedTime} hs</p>
                   )}
@@ -1383,7 +1573,7 @@ export function Booking() {
               </div>
 
               <div className="flex gap-4 mt-6">
-                <Button type="button" variant="outline" onClick={() => setStep(4)}>
+                <Button type="button" variant="outline" onClick={() => appointmentMode === 'tratamiento' ? setStep(3) : setStep(4)}>
                   Volver
                 </Button>
                 <Button type="submit" className="flex-1" disabled={isSubmitting}>
