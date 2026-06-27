@@ -11,11 +11,20 @@ export default function CajaPage() {
   const router = useRouter()
 
   useEffect(() => {
-    const session = localStorage.getItem('adminSession')
-    if (!session) {
+    const sessionRaw = localStorage.getItem('adminSession')
+    if (!sessionRaw) {
       router.push('/admin/login')
     } else {
-      setIsAuthenticated(true)
+      try {
+        const session = JSON.parse(sessionRaw)
+        if (session.role === 'traumatologia') {
+          router.push('/admin-traumatologia')
+        } else {
+          setIsAuthenticated(true)
+        }
+      } catch {
+        router.push('/admin/login')
+      }
     }
     setIsLoading(false)
   }, [router])

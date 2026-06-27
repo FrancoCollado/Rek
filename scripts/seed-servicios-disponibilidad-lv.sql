@@ -4,7 +4,7 @@
 -- Objetivo:
 -- 1) Asegurar profesionales activos (rol = kinesiologo)
 -- 2) Configurar disponibilidad: lunes a viernes 07:00-20:00, sabado 09:00-13:00
--- 3) Agenda en bloques de 30 minutos
+-- 3) Agenda con intervalos de 15 minutos
 -- 4) Script idempotente
 
 BEGIN;
@@ -30,7 +30,7 @@ USING usuarios u
 WHERE dp.usuario_id = u.id
   AND u.rol = 'kinesiologo';
 
--- 3) Disponibilidad para kinesiologia y traumatologia
+-- 3) Disponibilidad para kinesiologia
 INSERT INTO disponibilidad_profesional (
   usuario_id,
   servicio,
@@ -47,14 +47,13 @@ SELECT
   d.dia_semana,
   d.hora_inicio,
   d.hora_fin,
-  30,
+  15,
   30,
   TRUE
 FROM usuarios u
 CROSS JOIN (
   VALUES
-    ('kinesiologia'::text),
-    ('traumatologia'::text)
+    ('kinesiologia'::text)
 ) AS s(servicio)
 CROSS JOIN (
   VALUES

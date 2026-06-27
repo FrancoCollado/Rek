@@ -10,6 +10,8 @@ const serviceLabels: Record<string, { name: string; duration: string }> = {
   traumatologia: { name: "Traumatología", duration: "30 min" },
 }
 
+const CANCELLATION_NOTICE_HOURS = 4
+
 type AvailabilityRow = {
   id: string
   usuario_id: string
@@ -22,6 +24,13 @@ type AvailabilityRow = {
   usuarios?: {
     nombre: string
     apellido: string
+    rol: string
+    email: string
+  } | {
+    nombre: string
+    apellido: string
+    rol: string
+    email: string
   }[] | null
 }
 
@@ -51,6 +60,13 @@ type ActiveTreatment = {
 type SelectedSession = {
   date: string
   time: string
+}
+
+type FormData = {
+  firstName: string
+  lastName: string
+  email: string
+  phone: string
 }
 
 type InsurancePreset = 'iapos' | 'swiss_medical' | 'otra'
@@ -145,7 +161,7 @@ function getServiceLabel(serviceId: string) {
 }
 
 function getProfessionalName(row: AvailabilityRow) {
-  const professional = row.usuarios?.[0]
+  const professional = Array.isArray(row.usuarios) ? row.usuarios[0] : row.usuarios
   return professional
     ? `${professional.nombre} ${professional.apellido}`
     : "Profesional disponible"
@@ -153,16 +169,13 @@ function getProfessionalName(row: AvailabilityRow) {
 
 function getSlotCapacityByTime(slotTime: string) {
   const minutes = timeToMinutes(slotTime)
-  const noonStart = 12 * 60
-  const afternoonEnd = 16 * 60
-
-  if (minutes >= noonStart && minutes < afternoonEnd) {
-    return 1
-  }
-
   const minuteOfHour = minutes % 60
   if (minuteOfHour === 0) {
-    return 3
+    return 2
+  }
+
+  if (minuteOfHour === 15) {
+    return 1
   }
 
   if (minuteOfHour === 30) {
@@ -243,9 +256,10 @@ export function Booking() {
   const [insurancePreset, setInsurancePreset] = useState<InsurancePreset>('iapos')
   const [customInsuranceName, setCustomInsuranceName] = useState('')
   const [treatmentSessions, setTreatmentSessions] = useState('10')
+  const [treatmentNote, setTreatmentNote] = useState('')
   const [medicalOrderFile, setMedicalOrderFile] = useState<File | null>(null)
   const [dni, setDni] = useState('')
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' })
+  const [formData, setFormData] = useState<FormData>({ firstName: '', lastName: '', email: '', phone: '' })
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [createdSessionsCount, setCreatedSessionsCount] = useState(1)
   const [isLoadingConfig, setIsLoadingConfig] = useState(true)
@@ -266,6 +280,8 @@ export function Booking() {
   const maxTreatmentSessions = Math.max(1, Number(treatmentSessions || "1"))
   const insurancePolicy = getInsurancePolicy(insurancePreset, customInsuranceName)
   const insuranceName = insurancePolicy.displayName
+  const isTraumatologiaFlow = selectedService === 'traumatologia'
+  const maxSelectableSessions = isTraumatologiaFlow ? 30 : maxTreatmentSessions
 
   const handlePrevMonth = () => {
     if (currentMonth === 0) {
@@ -309,7 +325,7 @@ export function Booking() {
         const supabase = createClient()
         const { data, error } = await supabase
           .from('disponibilidad_profesional')
-          .select('id, usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos, usuarios(nombre, apellido)')
+          .select('id, usuario_id, servicio, dia_semana, hora_inicio, hora_fin, intervalo_minutos, duracion_minutos, usuarios!inner(nombre, apellido, rol, email)')
           .eq('activo', true)
           .order('servicio')
           .order('dia_semana')
@@ -321,9 +337,19 @@ export function Booking() {
         if (!isActive) return
 
         const rows = (data || []) as unknown as AvailabilityRow[]
-        const serviceOptions = Array.from(new Set(rows.map((row) => row.servicio))).map((serviceId) => {
+        const filteredRows = rows.filter((row) => {
+          if (row.servicio !== 'traumatologia') return true
+
+          const professional = Array.isArray(row.usuarios) ? row.usuarios[0] : row.usuarios
+          return (
+            professional?.rol === 'traumatologa' &&
+            professional?.email === 'traumatologia@rek.com'
+          )
+        })
+
+        const serviceOptions = Array.from(new Set(filteredRows.map((row) => row.servicio))).map((serviceId) => {
           const serviceLabel = getServiceLabel(serviceId)
-          const firstRow = rows.find((row) => row.servicio === serviceId)
+          const firstRow = filteredRows.find((row) => row.servicio === serviceId)
           return {
             id: serviceId,
             name: serviceLabel.name,
@@ -331,7 +357,7 @@ export function Booking() {
           }
         })
 
-        setAvailabilityRows(rows)
+        setAvailabilityRows(filteredRows)
         setServices(serviceOptions)
         setSelectedService((current) => {
           if (current && serviceOptions.some((service) => service.id === current)) return current
@@ -382,8 +408,8 @@ export function Booking() {
   const addTreatmentSession = () => {
     if (!selectedDate || !selectedTime) return
 
-    if (selectedTreatmentSessions.length >= maxTreatmentSessions) {
-      setSubmitError(`Ya seleccionaste el máximo de ${maxTreatmentSessions} sesiones.`)
+    if (selectedTreatmentSessions.length >= maxSelectableSessions) {
+      setSubmitError(`Ya seleccionaste el máximo de ${maxSelectableSessions} sesiones.`)
       return
     }
 
@@ -496,12 +522,12 @@ export function Booking() {
       }
 
       if (appointmentMode === 'tratamiento' && selectedTreatmentSessions.length === 0) {
-        setSubmitError('Seleccioná al menos una sesión para el tratamiento.')
-        setStep(4)
+        setSubmitError(isTraumatologiaFlow ? 'Seleccioná al menos una sesión para continuar.' : 'Seleccioná al menos una sesión para el tratamiento.')
+        setStep(isTraumatologiaFlow ? 3 : 4)
         return
       }
 
-      if (insurancePreset === 'otra' && !customInsuranceName.trim()) {
+      if (!isTraumatologiaFlow && insurancePreset === 'otra' && !customInsuranceName.trim()) {
         setSubmitError('Indicá tu obra social antes de continuar.')
         setStep(2)
         return
@@ -523,14 +549,20 @@ export function Booking() {
         ? Math.max(1, Number(treatmentSessions || '1'))
         : 1
 
-      if (appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && !medicalOrderFile) {
+      if (!isTraumatologiaFlow && appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && !medicalOrderFile) {
         setSubmitError('Para iniciar tratamiento debés adjuntar la orden médica.')
         setStep(2)
         return
       }
 
-      if (!isReturningPatient) {
-        if (!formData.name.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      if (isTraumatologiaFlow && !isReturningPatient) {
+        if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.phone.trim()) {
+          setSubmitError('Completá nombre, apellido y WhatsApp para continuar.')
+          setStep(5)
+          return
+        }
+      } else if (!isReturningPatient) {
+        if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.email.trim() || !formData.phone.trim()) {
           setSubmitError('Completá tus datos personales para crear el paciente.')
           setStep(5)
           return
@@ -548,11 +580,85 @@ export function Booking() {
 
       let patientId: string | null = null
       const normalizedDni = dni.trim()
+      const entidadId = selectedService === 'traumatologia' ? 'traumatologia' : 'kinesiologia'
 
-      if (isReturningPatient) {
+      if (isTraumatologiaFlow && isReturningPatient) {
+        const { data: existingPatient, error: existingPatientError } = await supabase
+          .from('pacientes')
+          .select('id')
+          .eq('entidad_id', entidadId)
+          .eq('dni', normalizedDni)
+          .maybeSingle()
+
+        if (existingPatientError) {
+          throw new Error(`[Búsqueda Paciente Existente] ${existingPatientError.message || 'Error al buscar paciente'}`)
+        }
+
+        if (!existingPatient) {
+          setSubmitError('No encontramos un paciente con ese DNI en traumatología. Verificá el dato o elegí "No" para registrarte.')
+          return
+        }
+
+        patientId = existingPatient.id
+      } else if (isTraumatologiaFlow) {
+        const capitalizedFirstName = formData.firstName.trim().charAt(0).toUpperCase() + formData.firstName.trim().slice(1)
+        const capitalizedLastName = formData.lastName
+          .trim()
+          .split(' ')
+          .filter(Boolean)
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ')
+
+        const { data: patientByDni, error: patientByDniError } = await supabase
+          .from('pacientes')
+          .select('id')
+          .eq('entidad_id', entidadId)
+          .eq('dni', normalizedDni)
+          .maybeSingle()
+
+        if (patientByDniError) {
+          throw new Error(`[Búsqueda Paciente DNI] ${patientByDniError.message || 'Error al buscar paciente por DNI'}`)
+        }
+
+        if (patientByDni) {
+          patientId = patientByDni.id
+          const { error: updatePatientError } = await supabase
+            .from('pacientes')
+            .update({
+              nombre: capitalizedFirstName,
+              apellido: capitalizedLastName,
+              telefono: formData.phone.trim(),
+            })
+            .eq('id', patientId)
+
+          if (updatePatientError) {
+            throw new Error(`[Actualizar Paciente] ${updatePatientError.message || 'Error al actualizar paciente'}`)
+          }
+        } else {
+          const { data: pacientesData, error: createPatientError } = await supabase
+            .from('pacientes')
+            .insert({
+              entidad_id: entidadId,
+              nombre: capitalizedFirstName,
+              apellido: capitalizedLastName,
+              telefono: formData.phone.trim(),
+              dni: normalizedDni,
+              email: null,
+              obra_social: null,
+            })
+            .select('id')
+            .single()
+
+          if (createPatientError) {
+            throw new Error(`[Crear Paciente] ${createPatientError.message || 'Error al crear paciente'}`)
+          }
+          patientId = pacientesData.id
+        }
+      } else if (isReturningPatient) {
         const { data: existingPatient, error: existingPatientError } = await supabase
           .from('pacientes')
           .select('id, obra_social')
+          .eq('entidad_id', entidadId)
           .eq('dni', normalizedDni)
           .maybeSingle()
 
@@ -573,13 +679,19 @@ export function Booking() {
             .eq('id', patientId)
         }
       } else {
-        const nameParts = formData.name.toLowerCase().trim().replace(/\s+/g, ' ').split(' ')
-        const firstName = nameParts[0]
-        const lastName = nameParts.slice(1).join(' ')
+        const firstName = formData.firstName.trim()
+        const lastName = formData.lastName.trim()
+        const capitalizedFirstName = firstName.charAt(0).toUpperCase() + firstName.slice(1)
+        const capitalizedLastName = lastName
+          .split(' ')
+          .filter(Boolean)
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ')
 
         const { data: patientByDni, error: patientByDniError } = await supabase
           .from('pacientes')
           .select('id')
+          .eq('entidad_id', entidadId)
           .eq('dni', normalizedDni)
           .maybeSingle()
 
@@ -589,22 +701,27 @@ export function Booking() {
 
         if (patientByDni) {
           patientId = patientByDni.id
-          await supabase
+          const { error: updatePatientError } = await supabase
             .from('pacientes')
             .update({
-              nombre: firstName.charAt(0).toUpperCase() + firstName.slice(1),
-              apellido: lastName.split(' ').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+              nombre: capitalizedFirstName,
+              apellido: capitalizedLastName,
               email: formData.email.trim(),
               telefono: formData.phone.trim(),
               obra_social: insuranceName.trim(),
             })
             .eq('id', patientId)
+
+          if (updatePatientError) {
+            throw new Error(`[Actualizar Paciente] ${updatePatientError.message || 'Error al actualizar paciente'}`)
+          }
         } else {
           const { data: pacientesData, error: createPatientError } = await supabase
             .from('pacientes')
             .insert({
-              nombre: firstName.charAt(0).toUpperCase() + firstName.slice(1),
-              apellido: lastName.split(' ').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+              entidad_id: entidadId,
+              nombre: capitalizedFirstName,
+              apellido: capitalizedLastName,
               email: formData.email.trim(),
               telefono: formData.phone.trim(),
               dni: normalizedDni,
@@ -688,7 +805,7 @@ export function Booking() {
 
       let tratamientoId: string | null = null
 
-      if (appointmentMode === 'tratamiento') {
+      if (appointmentMode === 'tratamiento' && !isTraumatologiaFlow) {
         let orderReference = medicalOrderFile?.name || 'orden_medica'
         const treatmentPrice = sessionsRequested * insurancePolicy.perSessionAmount
         const totalDebtWithStamp = treatmentPrice + insurancePolicy.stampAmount
@@ -710,10 +827,15 @@ export function Booking() {
         const treatmentNotes = insurancePreset === 'iapos'
           ? `Obra social: ${insuranceName.trim()} | Bonos: 3 por sesión | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único) | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
           : `Obra social: ${insuranceName.trim()} | Orden: ${orderReference} | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único) | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
+        const userTreatmentNote = treatmentNote.trim()
+        const finalTreatmentNotes = userTreatmentNote
+          ? `${treatmentNotes} | Nota paciente: ${userTreatmentNote}`
+          : treatmentNotes
 
         const { data: createdTreatment, error: treatmentError } = await supabase
           .from('tratamientos')
           .insert({
+            entidad_id: entidadId,
             paciente_id: patientId,
             servicio: selectedService,
             tipo_plan: insurancePreset === 'iapos' ? 'libre' : 'orden',
@@ -722,7 +844,7 @@ export function Booking() {
             precio_total: totalDebtWithStamp,
             monto_pagado: 0,
             estado: 'activo',
-            notas: treatmentNotes,
+            notas: finalTreatmentNotes,
           })
           .select('id')
           .single()
@@ -736,6 +858,7 @@ export function Booking() {
           .from('saldo_paciente')
           .select('saldo_deuda, sesiones_pendientes')
           .eq('paciente_id', patientId)
+          .eq('entidad_id', entidadId)
           .maybeSingle()
 
         if (balanceError) {
@@ -749,9 +872,10 @@ export function Booking() {
           .from('saldo_paciente')
           .upsert({
             paciente_id: patientId,
+            entidad_id: entidadId,
             saldo_deuda: currentDebt + totalDebtWithStamp,
             sesiones_pendientes: currentPendingSessions + sessionsRequested,
-          }, { onConflict: 'paciente_id' })
+          }, { onConflict: 'paciente_id,entidad_id' })
 
         if (upsertBalanceError) {
           throw new Error(`[Upsert Saldo] ${upsertBalanceError.message || 'Error al actualizar saldo'}`)
@@ -761,6 +885,7 @@ export function Booking() {
       for (let index = 0; index < assignments.length; index += 1) {
         const assignment = assignments[index]
         const payload = {
+          entidad_id: entidadId,
           paciente_id: patientId,
           usuario_id: assignment.usuarioId,
           tratamiento_id: tratamientoId,
@@ -814,8 +939,13 @@ export function Booking() {
             <h2 className="font-serif text-4xl md:text-5xl mb-4">¡Turno reservado!</h2>
             <p className="text-muted-foreground text-lg mb-8">
               {appointmentMode === 'tratamiento'
-                ? `Se registraron ${createdSessionsCount} sesiones para tu plan de tratamiento.`
+                ? isTraumatologiaFlow
+                  ? `Se registraron ${createdSessionsCount} sesiones de traumatología.`
+                  : `Se registraron ${createdSessionsCount} sesiones para tu plan de tratamiento.`
                 : 'Se registró tu sesión suelta correctamente.'}
+            </p>
+            <p className="text-sm text-muted-foreground mb-8 p-3 rounded-lg border border-border bg-card">
+              Recordá que las cancelaciones deben realizarse con al menos {CANCELLATION_NOTICE_HOURS} horas de anticipación.
             </p>
             <div className="bg-card border border-border rounded-lg p-6 text-left mb-8">
               <div className="grid gap-4">
@@ -837,23 +967,33 @@ export function Booking() {
                 )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Modalidad</span>
-                  <span className="font-medium">{appointmentMode === 'tratamiento' ? `Tratamiento — ${createdSessionsCount} sesiones` : 'Sesión suelta'}</span>
+                  <span className="font-medium">
+                    {appointmentMode === 'tratamiento'
+                      ? isTraumatologiaFlow
+                        ? `Múltiples sesiones — ${createdSessionsCount} seleccionadas`
+                        : `Tratamiento — ${createdSessionsCount} sesiones`
+                      : 'Sesión suelta'}
+                  </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Obra social</span>
-                  <span className="font-medium">{insuranceName}</span>
-                </div>
-                <hr className="border-border" />
-                <p className="text-sm font-medium text-muted-foreground">Requisitos para tu obra social</p>
-                <ul className="text-sm space-y-1">
-                  {getInsurancePolicy(insurancePreset, customInsuranceName).requirements.map((req) => (
-                    <li key={req} className="flex gap-2">
-                      <span className="text-primary font-bold">•</span>
-                      <span>{req}</span>
-                    </li>
-                  ))}
-                </ul>
-                {appointmentMode === 'tratamiento' && (
+                {!isTraumatologiaFlow && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Obra social</span>
+                      <span className="font-medium">{insuranceName}</span>
+                    </div>
+                    <hr className="border-border" />
+                    <p className="text-sm font-medium text-muted-foreground">Requisitos para tu obra social</p>
+                    <ul className="text-sm space-y-1">
+                      {getInsurancePolicy(insurancePreset, customInsuranceName).requirements.map((req) => (
+                        <li key={req} className="flex gap-2">
+                          <span className="text-primary font-bold">•</span>
+                          <span>{req}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {appointmentMode === 'tratamiento' && !isTraumatologiaFlow && (
                   <div className="mt-2 p-3 rounded-lg bg-primary/5 border border-primary/20">
                     <p className="text-sm font-medium">Deuda registrada en tu cuenta corriente</p>
                     <p className="text-xs text-muted-foreground mt-1">
@@ -876,9 +1016,10 @@ export function Booking() {
                 setInsurancePreset('iapos')
                 setCustomInsuranceName('')
                 setTreatmentSessions('10')
+                setTreatmentNote('')
                 setMedicalOrderFile(null)
                 setDni('')
-                setFormData({ name: '', email: '', phone: '' })
+                setFormData({ firstName: '', lastName: '', email: '', phone: '' })
               }}
               variant="outline"
             >
@@ -980,7 +1121,19 @@ export function Booking() {
               <Button 
                 className="mt-4"
                 disabled={!selectedService || isLoadingConfig || services.length === 0}
-                onClick={() => setStep(2)}
+                onClick={() => {
+                  if (selectedService === 'traumatologia') {
+                    setAppointmentMode('tratamiento')
+                    setSelectedTreatmentSessions([])
+                    setSelectedDate(null)
+                    setSelectedTime(null)
+                    setSubmitError(null)
+                    setStep(3)
+                    return
+                  }
+
+                  setStep(2)
+                }}
               >
                 Continuar
               </Button>
@@ -988,7 +1141,7 @@ export function Booking() {
           )}
 
           {/* Step 2: Mode + Insurance */}
-          {step === 2 && (
+          {step === 2 && !isTraumatologiaFlow && (
             <div className="bg-card border border-border rounded-lg p-6">
               <h3 className="font-serif text-2xl mb-4">¿Cómo querés atenderte?</h3>
 
@@ -1010,6 +1163,7 @@ export function Booking() {
                   onClick={() => {
                     setAppointmentMode('suelta')
                     setSelectedTreatmentSessions([])
+                    setTreatmentNote('')
                     setSubmitError(null)
                   }}
                   className={`p-4 rounded-lg border text-left ${appointmentMode === 'suelta' ? 'border-primary bg-primary/5' : 'border-border'}`}
@@ -1100,6 +1254,16 @@ export function Booking() {
                       </p>
                     </div>
                   )}
+
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Notas del tratamiento (opcional)</label>
+                    <textarea
+                      value={treatmentNote}
+                      onChange={(e) => setTreatmentNote(e.target.value)}
+                      className="w-full min-h-24 px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                      placeholder="Ej: lesiones previas, preferencias de horario, indicaciones de seguimiento"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1128,7 +1292,7 @@ export function Booking() {
             </div>
           )}
 
-          {/* Step 3: Date Selection (Suelta) or Unified Date+Time (Tratamiento) */}
+          {/* Step 3: Date Selection (Suelta) or Unified Date+Time (Tratamiento/Traumatología) */}
           {step === 3 && (
             <div className="bg-card border border-border rounded-lg p-6">
               {appointmentMode === 'tratamiento' ? (
@@ -1190,7 +1354,9 @@ export function Booking() {
                       })}
                     </div>
                     <p className="text-[11px] text-muted-foreground mt-3 leading-snug">
-                      Seleccioná fecha, luego elige horarios.
+                      {isTraumatologiaFlow
+                        ? 'Seleccioná fecha y agregá una o varias sesiones según disponibilidad.'
+                        : 'Seleccioná fecha, luego elegí horarios.'}
                     </p>
                   </div>
 
@@ -1206,7 +1372,7 @@ export function Booking() {
                             </span>
                           </div>
 
-                          <h4 className="text-sm font-medium mb-3">Horarios disponibles</h4>
+                            <h4 className="text-sm font-medium mb-3">Horarios disponibles</h4>
                           {isLoadingAvailability && (
                             <p className="text-xs text-muted-foreground">Cargando...</p>
                           )}
@@ -1254,7 +1420,7 @@ export function Booking() {
                               size="sm"
                               className="w-full"
                               onClick={addTreatmentSession}
-                              disabled={selectedTreatmentSessions.length >= maxTreatmentSessions}
+                              disabled={selectedTreatmentSessions.length >= maxSelectableSessions}
                             >
                               + Agregar sesión a las {selectedTime}
                             </Button>
@@ -1265,14 +1431,22 @@ export function Booking() {
                         <div className="border-t pt-4">
                           <div className="flex items-center justify-between mb-3">
                             <h4 className="text-sm font-medium">Plan de sesiones</h4>
-                            <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-medium">
-                              {selectedTreatmentSessions.length}/{maxTreatmentSessions}
-                            </span>
+                            {isTraumatologiaFlow ? (
+                              <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-medium">
+                                {selectedTreatmentSessions.length} seleccionadas
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-medium">
+                                {selectedTreatmentSessions.length}/{maxTreatmentSessions}
+                              </span>
+                            )}
                           </div>
 
                           {selectedTreatmentSessions.length === 0 ? (
                             <p className="text-xs text-muted-foreground p-3 bg-secondary/30 rounded">
-                              Elegí un horario y agregá sesiones a tu plan.
+                              {isTraumatologiaFlow
+                                ? 'Elegí un horario y agregá una o varias sesiones.'
+                                : 'Elegí un horario y agregá sesiones a tu plan.'}
                             </p>
                           ) : (
                             <div className="space-y-2 max-h-56 overflow-y-auto pr-2">
@@ -1375,7 +1549,7 @@ export function Booking() {
               )}
 
               <div className="flex gap-4 mt-6">
-                <Button variant="outline" onClick={() => setStep(2)}>
+                <Button variant="outline" onClick={() => setStep(isTraumatologiaFlow ? 1 : 2)}>
                   Volver
                 </Button>
                 <Button 
@@ -1459,7 +1633,11 @@ export function Booking() {
                   <p>{services.find(s => s.id === selectedService)?.name}</p>
                   {appointmentMode === 'tratamiento' ? (
                     <>
-                      <p>Sesiones elegidas: <strong>{selectedTreatmentSessions.length}</strong> de <strong>{maxTreatmentSessions}</strong></p>
+                      {isTraumatologiaFlow ? (
+                        <p>Sesiones elegidas: <strong>{selectedTreatmentSessions.length}</strong></p>
+                      ) : (
+                        <p>Sesiones elegidas: <strong>{selectedTreatmentSessions.length}</strong> de <strong>{maxTreatmentSessions}</strong></p>
+                      )}
                       {selectedTreatmentSessions.length > 0 && (
                         <div className="mt-2 space-y-1 text-xs pl-4 border-l-2 border-primary/30">
                           {selectedTreatmentSessions
@@ -1477,12 +1655,20 @@ export function Booking() {
                     <p>{selectedDate?.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })} a las {selectedTime} hs</p>
                   )}
                   {appointmentMode === 'tratamiento' ? (
-                    <p>Modalidad: Tratamiento ({selectedTreatmentSessions.length} seleccionadas de {maxTreatmentSessions})</p>
+                    <p>
+                      Modalidad: {isTraumatologiaFlow
+                        ? `Múltiples sesiones (${selectedTreatmentSessions.length} seleccionadas)`
+                        : `Tratamiento (${selectedTreatmentSessions.length} seleccionadas de ${maxTreatmentSessions})`}
+                    </p>
                   ) : (
                     <p>Modalidad: Sesión suelta</p>
                   )}
-                  <p>Condiciones: estampillado único ${insurancePolicy.stampAmount.toLocaleString()} y plus por sesión ${insurancePolicy.perSessionAmount.toLocaleString()}</p>
-                  <p>Obra social: {insuranceName || 'No informada'}</p>
+                  {!isTraumatologiaFlow && (
+                    <>
+                      <p>Condiciones: estampillado único ${insurancePolicy.stampAmount.toLocaleString()} y plus por sesión ${insurancePolicy.perSessionAmount.toLocaleString()}</p>
+                      <p>Obra social: {insuranceName || 'No informada'}</p>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1527,20 +1713,35 @@ export function Booking() {
                 {isReturningPatient === false && (
                   <>
                     <div>
-                      <label htmlFor="name" className="block text-sm font-medium mb-2">
-                        Nombre completo
+                      <label htmlFor="firstName" className="block text-sm font-medium mb-2">
+                        Nombre
                       </label>
                       <input
-                        id="name"
+                        id="firstName"
                         type="text"
                         required
-                        value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        value={formData.firstName}
+                        onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
                         className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                        placeholder="Juan Pérez"
+                        placeholder="Juan"
                       />
                     </div>
                     <div>
+                      <label htmlFor="lastName" className="block text-sm font-medium mb-2">
+                        Apellido
+                      </label>
+                      <input
+                        id="lastName"
+                        type="text"
+                        required
+                        value={formData.lastName}
+                        onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                        className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                        placeholder="Pérez"
+                      />
+                    </div>
+                    {!isTraumatologiaFlow && (
+                      <div>
                       <label htmlFor="email" className="block text-sm font-medium mb-2">
                         Email
                       </label>
@@ -1553,10 +1754,11 @@ export function Booking() {
                         className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                         placeholder="juan@email.com"
                       />
-                    </div>
+                      </div>
+                    )}
                     <div>
                       <label htmlFor="phone" className="block text-sm font-medium mb-2">
-                        Teléfono
+                        {isTraumatologiaFlow ? 'Nro de WhatsApp' : 'Teléfono'}
                       </label>
                       <input
                         id="phone"
@@ -1565,7 +1767,7 @@ export function Booking() {
                         value={formData.phone}
                         onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                         className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                        placeholder="11 1234-5678"
+                        placeholder={isTraumatologiaFlow ? 'Ej: 3411234567' : '11 1234-5678'}
                       />
                     </div>
                   </>

@@ -2,25 +2,22 @@
 
 import { useEffect, useState } from 'react'
 import { Card } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Calendar, Users, DollarSign, Clock } from 'lucide-react'
+import { Calendar, Users, Clock } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 
 interface Turno {
   id: string
   pacientes?: { nombre: string; apellido: string }
-  usuarios?: { nombre: string; apellido: string }
   servicio: string
   hora: string
   fecha: string
 }
 
-export default function AdminDashboard() {
+export default function AdminTraumatologiaDashboard() {
   const [stats, setStats] = useState({
     turnosHoy: 0,
     turnosPendientes: 0,
     pacientesTotales: 0,
-    ingresosMes: 0,
   })
   const [upcomingTurns, setUpcomingTurns] = useState<Turno[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,63 +27,49 @@ export default function AdminDashboard() {
       const supabase = createClient()
 
       try {
-        // Obtener turnos de hoy
         const today = new Date().toISOString().split('T')[0]
+
         const { data: turnosHoy } = await supabase
           .from('turnos')
-          .select('*')
-          .eq('entidad_id', 'kinesiologia')
+          .select('id')
+          .eq('entidad_id', 'traumatologia')
           .eq('fecha', today)
-        
-        // Obtener turnos pendientes
+          .neq('estado', 'cancelado')
+
         const { data: turnosPendientes } = await supabase
           .from('turnos')
-          .select('*')
-          .eq('entidad_id', 'kinesiologia')
+          .select('id, paciente_id')
+          .eq('entidad_id', 'traumatologia')
           .eq('estado', 'pendiente')
 
-        // Obtener total de pacientes de kinesiologia (por turnos)
-        const { data: pacientesTurnos } = await supabase
+        const { data: turnosPacientes } = await supabase
           .from('turnos')
           .select('paciente_id')
-          .eq('entidad_id', 'kinesiologia')
-
-        // Obtener ingresos del mes
-        const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-          .toISOString()
-          .split('T')[0]
-        const { data: movimientos } = await supabase
-          .from('movimientos_caja')
-          .select('*')
-          .eq('tipo', 'ingreso')
-          .gte('fecha', firstDay)
-
-        // Obtener próximos turnos
-        const { data: turnos } = await supabase
-          .from('turnos')
-          .select('id, fecha, hora, servicio, pacientes(nombre, apellido), usuarios(nombre, apellido)')
-          .eq('entidad_id', 'kinesiologia')
-          .order('fecha')
-          .order('hora')
-          .limit(5)
-
-        const totalIngresos = movimientos?.reduce((sum, mov) => sum + parseFloat(mov.monto), 0) || 0
+          .eq('entidad_id', 'traumatologia')
 
         const uniquePatients = new Set<string>()
-        ;(pacientesTurnos || []).forEach((row: any) => {
+        ;(turnosPacientes || []).forEach((row: any) => {
           if (row.paciente_id) uniquePatients.add(row.paciente_id)
         })
+
+        const { data: turnos } = await supabase
+          .from('turnos')
+          .select('id, fecha, hora, servicio, pacientes(nombre, apellido)')
+          .eq('entidad_id', 'traumatologia')
+          .neq('estado', 'cancelado')
+          .order('fecha')
+          .order('hora')
+          .limit(8)
 
         setStats({
           turnosHoy: turnosHoy?.length || 0,
           turnosPendientes: turnosPendientes?.length || 0,
           pacientesTotales: uniquePatients.size,
-          ingresosMes: totalIngresos,
         })
 
-        setUpcomingTurns(turnos || [])
+        setUpcomingTurns((turnos || []) as Turno[])
       } catch (error) {
-        console.error('[v0] Error fetching dashboard data:', error)
+        console.error('[v0] Error fetching traumatologia dashboard data:', error)
       } finally {
         setLoading(false)
       }
@@ -98,19 +81,17 @@ export default function AdminDashboard() {
   const statsConfig = [
     { label: 'Turnos hoy', value: stats.turnosHoy, icon: Calendar, color: 'bg-primary/10' },
     { label: 'Turnos pendientes', value: stats.turnosPendientes, icon: Clock, color: 'bg-accent/10' },
-    { label: 'Pacientes totales', value: stats.pacientesTotales, icon: Users, color: 'bg-secondary/10' },
-    { label: 'Ingresos (mes)', value: `$${stats.ingresosMes.toFixed(2)}`, icon: DollarSign, color: 'bg-green-500/10' },
+    { label: 'Pacientes trauma', value: stats.pacientesTotales, icon: Users, color: 'bg-secondary/10' },
   ]
 
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h1 className="text-4xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">Bienvenido al panel de administración</p>
+        <h1 className="text-4xl font-bold">Dashboard Traumatologia</h1>
+        <p className="text-muted-foreground">Panel independiente de traumatologia</p>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid md:grid-cols-4 gap-4 mb-8">
+      <div className="grid md:grid-cols-3 gap-4 mb-8">
         {statsConfig.map((stat, i) => {
           const Icon = stat.icon
           return (
@@ -127,45 +108,32 @@ export default function AdminDashboard() {
         })}
       </div>
 
-      {/* Upcoming Turns */}
       <Card className="p-6">
-        <h2 className="text-xl font-bold mb-4">Próximos turnos</h2>
+        <h2 className="text-xl font-bold mb-4">Proximos turnos de traumatologia</h2>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="border-b border-border">
               <tr className="text-left text-sm text-muted-foreground">
                 <th className="pb-3 font-medium">Paciente</th>
-                <th className="pb-3 font-medium">Servicio</th>
                 <th className="pb-3 font-medium">Fecha</th>
                 <th className="pb-3 font-medium">Hora</th>
-                <th className="pb-3 font-medium">Profesional</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="py-3 text-center text-muted-foreground">
-                    Cargando...
-                  </td>
+                  <td colSpan={3} className="py-3 text-center text-muted-foreground">Cargando...</td>
                 </tr>
               ) : upcomingTurns.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-3 text-center text-muted-foreground">
-                    No hay turnos próximos
-                  </td>
+                  <td colSpan={3} className="py-3 text-center text-muted-foreground">No hay turnos proximos</td>
                 </tr>
               ) : (
                 upcomingTurns.map((turn) => (
                   <tr key={turn.id} className="border-b border-border last:border-0">
-                    <td className="py-3">
-                      {turn.pacientes?.nombre} {turn.pacientes?.apellido}
-                    </td>
-                    <td className="py-3 capitalize">{turn.servicio}</td>
+                    <td className="py-3">{turn.pacientes?.nombre} {turn.pacientes?.apellido}</td>
                     <td className="py-3">{turn.fecha}</td>
-                    <td className="py-3">{turn.hora}</td>
-                    <td className="py-3">
-                      {turn.usuarios?.nombre} {turn.usuarios?.apellido}
-                    </td>
+                    <td className="py-3">{String(turn.hora).slice(0, 5)}</td>
                   </tr>
                 ))
               )}

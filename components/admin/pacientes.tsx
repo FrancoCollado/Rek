@@ -24,6 +24,7 @@ interface Treatment {
   sesiones_realizadas: number
   precio_total: number
   monto_pagado: number
+  notas: string | null
   estado: 'activo' | 'pausado' | 'completado' | 'cancelado'
   fecha_inicio: string
 }
@@ -56,7 +57,10 @@ type TreatmentForm = {
   tipo_plan: 'orden' | 'libre'
   sesiones_totales: string
   precio_total: string
+  notas: string
 }
+
+type ServiceScope = 'kinesiologia' | 'traumatologia'
 
 const defaultPatientForm: PatientForm = {
   nombre: '',
@@ -65,11 +69,14 @@ const defaultPatientForm: PatientForm = {
   telefono: '',
 }
 
-const defaultTreatmentForm: TreatmentForm = {
-  servicio: 'kinesiologia',
-  tipo_plan: 'orden',
-  sesiones_totales: '10',
-  precio_total: '60000',
+function buildDefaultTreatmentForm(serviceScope?: ServiceScope): TreatmentForm {
+  return {
+    servicio: serviceScope || 'kinesiologia',
+    tipo_plan: 'orden',
+    sesiones_totales: '10',
+    precio_total: '60000',
+    notas: '',
+  }
 }
 
 const serviceLabels: Record<string, string> = {
@@ -81,7 +88,8 @@ function formatPatientName(patient: Patient) {
   return `${patient.nombre} ${patient.apellido}`.trim()
 }
 
-export default function PacientesComponent() {
+export default function PacientesComponent({ serviceScope }: { serviceScope?: ServiceScope } = {}) {
+  const currentEntity: ServiceScope = serviceScope || 'kinesiologia'
   const [patients, setPatients] = useState<Patient[]>([])
   const [treatments, setTreatments] = useState<Treatment[]>([])
   const [history, setHistory] = useState<TurnoHistory[]>([])
@@ -95,7 +103,7 @@ export default function PacientesComponent() {
   const [patientForm, setPatientForm] = useState<PatientForm>(defaultPatientForm)
 
   const [showTreatmentFormFor, setShowTreatmentFormFor] = useState<string | null>(null)
-  const [treatmentForm, setTreatmentForm] = useState<TreatmentForm>(defaultTreatmentForm)
+  const [treatmentForm, setTreatmentForm] = useState<TreatmentForm>(buildDefaultTreatmentForm(serviceScope))
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -117,21 +125,25 @@ export default function PacientesComponent() {
         supabase
           .from('pacientes')
           .select('id, nombre, apellido, email, telefono')
+          .eq('entidad_id', currentEntity)
           .order('apellido')
           .order('nombre'),
         supabase
           .from('tratamientos')
-          .select('id, paciente_id, servicio, tipo_plan, sesiones_totales, sesiones_realizadas, precio_total, monto_pagado, estado, fecha_inicio')
+          .select('id, paciente_id, servicio, tipo_plan, sesiones_totales, sesiones_realizadas, precio_total, monto_pagado, notas, estado, fecha_inicio')
+          .eq('entidad_id', currentEntity)
           .order('created_at', { ascending: false }),
         supabase
           .from('turnos')
           .select('id, paciente_id, fecha, hora, estado, servicio, numero_sesion')
+          .eq('entidad_id', currentEntity)
           .order('fecha', { ascending: false })
           .order('hora', { ascending: false })
           .limit(500),
         supabase
           .from('saldo_paciente')
-          .select('paciente_id, saldo_deuda, sesiones_pendientes'),
+          .select('paciente_id, saldo_deuda, sesiones_pendientes')
+          .eq('entidad_id', currentEntity),
       ])
 
       if (patientsError) throw patientsError
@@ -140,14 +152,25 @@ export default function PacientesComponent() {
       if (balancesError) throw balancesError
 
       setPatients((patientsData || []) as Patient[])
-      setTreatments(
+      const normalizedTreatments =
         ((treatmentsData || []) as any[]).map((t) => ({
           ...t,
           precio_total: Number(t.precio_total || 0),
           monto_pagado: Number(t.monto_pagado || 0),
         }))
-      )
-      setHistory((historyData || []) as TurnoHistory[])
+      const normalizedHistory = (historyData || []) as TurnoHistory[]
+
+      const usedPatientIds = new Set<string>()
+      normalizedTreatments.forEach((t) => usedPatientIds.add(t.paciente_id))
+      normalizedHistory.forEach((h) => usedPatientIds.add(h.paciente_id))
+
+      const filteredPatients = serviceScope
+        ? ((patientsData || []) as Patient[]).filter((patient) => usedPatientIds.has(patient.id))
+        : ((patientsData || []) as Patient[])
+
+      setPatients(filteredPatients)
+      setTreatments(normalizedTreatments)
+      setHistory(normalizedHistory)
       setBalances(
         ((balancesData || []) as any[]).map((row) => ({
           paciente_id: row.paciente_id,
@@ -236,6 +259,7 @@ export default function PacientesComponent() {
       const supabase = createClient()
 
       const payload = {
+        entidad_id: currentEntity,
         nombre: patientForm.nombre.trim(),
         apellido: patientForm.apellido.trim(),
         email: patientForm.email.trim() || null,
@@ -281,6 +305,7 @@ export default function PacientesComponent() {
       const { error: insertError } = await supabase
         .from('tratamientos')
         .insert({
+          entidad_id: currentEntity,
           paciente_id: patientId,
           servicio: treatmentForm.servicio,
           tipo_plan: treatmentForm.tipo_plan,
@@ -288,6 +313,7 @@ export default function PacientesComponent() {
           sesiones_realizadas: 0,
           precio_total: totalPrice,
           monto_pagado: 0,
+          notas: treatmentForm.notas.trim() || null,
           estado: 'activo',
         })
 
@@ -297,14 +323,15 @@ export default function PacientesComponent() {
         .from('saldo_paciente')
         .upsert({
           paciente_id: patientId,
+          entidad_id: currentEntity,
           saldo_deuda: totalPrice,
           sesiones_pendientes: totalSessions,
         }, {
-          onConflict: 'paciente_id',
+          onConflict: 'paciente_id,entidad_id',
         })
 
       setShowTreatmentFormFor(null)
-      setTreatmentForm(defaultTreatmentForm)
+      setTreatmentForm(buildDefaultTreatmentForm(serviceScope))
       await loadPatientsData()
     } catch (treatmentError) {
       console.error('[v0] Error creating treatment:', treatmentError)
@@ -456,7 +483,7 @@ export default function PacientesComponent() {
                           className="gap-2"
                           onClick={() => {
                             setShowTreatmentFormFor(showTreatmentFormFor === patient.id ? null : patient.id)
-                            setTreatmentForm(defaultTreatmentForm)
+                            setTreatmentForm(buildDefaultTreatmentForm(serviceScope))
                           }}
                         >
                           <FilePlus2 className="w-4 h-4" />
@@ -467,17 +494,26 @@ export default function PacientesComponent() {
                       {showTreatmentFormFor === patient.id && (
                         <Card className="p-4 mb-4 bg-secondary/30">
                           <div className="grid md:grid-cols-2 gap-3">
-                            <div>
-                              <label className="text-sm font-medium">Servicio</label>
-                              <select
-                                value={treatmentForm.servicio}
-                                onChange={(e) => setTreatmentForm({ ...treatmentForm, servicio: e.target.value })}
-                                className="w-full px-3 py-2 border border-border rounded-lg bg-background"
-                              >
-                                <option value="kinesiologia">Kinesiología</option>
-                                <option value="traumatologia">Traumatología</option>
-                              </select>
-                            </div>
+                            {!serviceScope ? (
+                              <div>
+                                <label className="text-sm font-medium">Servicio</label>
+                                <select
+                                  value={treatmentForm.servicio}
+                                  onChange={(e) => setTreatmentForm({ ...treatmentForm, servicio: e.target.value })}
+                                  className="w-full px-3 py-2 border border-border rounded-lg bg-background"
+                                >
+                                  <option value="kinesiologia">Kinesiología</option>
+                                  <option value="traumatologia">Traumatología</option>
+                                </select>
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="text-sm font-medium">Servicio</label>
+                                <div className="w-full px-3 py-2 border border-border rounded-lg bg-secondary/40 text-sm">
+                                  {serviceLabels[serviceScope] || serviceScope}
+                                </div>
+                              </div>
+                            )}
                             <div>
                               <label className="text-sm font-medium">Tipo</label>
                               <select
@@ -506,6 +542,15 @@ export default function PacientesComponent() {
                                 step="0.01"
                                 value={treatmentForm.precio_total}
                                 onChange={(e) => setTreatmentForm({ ...treatmentForm, precio_total: e.target.value })}
+                              />
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className="text-sm font-medium">Notas</label>
+                              <textarea
+                                value={treatmentForm.notas}
+                                onChange={(e) => setTreatmentForm({ ...treatmentForm, notas: e.target.value })}
+                                className="w-full px-3 py-2 border border-border rounded-lg bg-background min-h-24"
+                                placeholder="Opcional: observaciones clínicas, condiciones del plan o indicaciones"
                               />
                             </div>
                           </div>
@@ -539,6 +584,11 @@ export default function PacientesComponent() {
                                   <span>Pagado: ${treatment.monto_pagado.toFixed(2)}</span>
                                   <span>Saldo: ${debt.toFixed(2)}</span>
                                 </div>
+                                {treatment.notas && (
+                                  <div className="mt-2 text-muted-foreground">
+                                    <span className="font-medium text-foreground">Notas:</span> {treatment.notas}
+                                  </div>
+                                )}
                               </div>
                             )
                           })

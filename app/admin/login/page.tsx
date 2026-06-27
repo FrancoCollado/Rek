@@ -20,18 +20,27 @@ export default function LoginPage() {
     setError('')
     setIsLoading(true)
 
-    // Credenciales hardcodeadas para testing
-    const validUsername = 'admin'
-    const validPassword = 'rek2025'
+    const credentials = [
+      { username: 'admin', password: 'rek2025', role: 'admin' as const, redirect: '/admin' },
+      { username: 'traumatologia', password: 'trauma2026', role: 'traumatologia' as const, redirect: '/admin-traumatologia' },
+      { username: 'traumatologa', password: 'trauma2026', role: 'traumatologia' as const, redirect: '/admin-traumatologia' },
+    ]
 
     setTimeout(() => {
-      if (username === validUsername && password === validPassword) {
-        // Guardar sesión en localStorage
-        localStorage.setItem('adminSession', JSON.stringify({
-          username,
-          timestamp: new Date().getTime()
-        }))
-        router.push('/admin')
+      const matched = credentials.find(
+        (item) => username === item.username && password === item.password
+      )
+
+      if (matched) {
+        localStorage.setItem(
+          'adminSession',
+          JSON.stringify({
+            username: matched.username,
+            role: matched.role,
+            timestamp: new Date().getTime(),
+          })
+        )
+        router.push(matched.redirect)
       } else {
         setError('Usuario o contraseña incorrectos')
       }
@@ -90,7 +99,8 @@ export default function LoginPage() {
         </form>
 
         <p className="text-xs text-muted-foreground text-center mt-6">
-          Demo: usuario: <strong>admin</strong> | contraseña: <strong>rek2025</strong>
+          Demo admin: <strong>admin</strong> / <strong>rek2025</strong><br />
+          Demo trauma: <strong>traumatologia</strong> o <strong>traumatologa</strong> / <strong>trauma2026</strong>
         </p>
       </Card>
     </div>

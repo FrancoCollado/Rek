@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { ChevronLeft, ChevronRight, Check, FileText, Palette, XCircle } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check, FileText, Palette, Plus, XCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import TurnoCompletionModal from '@/components/admin/turno-completion-modal'
 
@@ -22,6 +22,8 @@ const TIME_SLOTS = Array.from({ length: 27 }, (_, i) => {
   return `${String(hour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
 })
 const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+
+type ServiceScope = 'kinesiologia' | 'traumatologia'
 
 const serviceLabels: Record<string, string> = {
   kinesiologia: 'Kinesiología',
@@ -128,6 +130,7 @@ interface Appointment {
   id: string
   date: string
   estado?: string
+  entidad_id?: 'kinesiologia' | 'traumatologia'
   day: number
   time: string
   patient: string
@@ -140,6 +143,7 @@ interface Appointment {
   sesiones_totales?: number | null
   asistido?: boolean
   cobrado?: boolean
+  notas?: string | null
   especialidad_id?: string | null
   especialidad_nombre?: string | null
   especialidad_color?: string | null
@@ -160,6 +164,45 @@ interface PatientHistoryEntry {
   servicio: string
   numero_sesion: number | null
   profesional: string
+  notas: string | null
+}
+
+interface PatientOption {
+  id: string
+  nombre: string
+  apellido: string
+  dni?: string | null
+}
+
+interface TreatmentOption {
+  id: string
+  paciente_id: string
+  servicio: 'kinesiologia' | 'traumatologia'
+  estado: string
+  sesiones_totales: number
+  sesiones_realizadas: number
+}
+
+interface CreateSlotContext {
+  dayIndex: number
+  time: string
+  date: string
+}
+
+type ManualTurnoForm = {
+  paciente_id: string
+  tratamiento_id: string
+  numero_sesion: string
+  monto_pagado: string
+  notas: string
+}
+
+const defaultManualTurnoForm: ManualTurnoForm = {
+  paciente_id: '',
+  tratamiento_id: '',
+  numero_sesion: '',
+  monto_pagado: '',
+  notas: '',
 }
 
 function buildAppointmentDedupKey(appointment: Appointment) {
@@ -199,7 +242,35 @@ function normalizeDbBoolean(value: unknown) {
   return false
 }
 
-export default function AgendaWeekly() {
+function formatDateForDb(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function normalizeSearchText(value: unknown) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+function formatPatientOptionLabel(patient: PatientOption) {
+  return `${patient.apellido || ''}, ${patient.nombre || ''}`.trim() + (patient.dni ? ` - DNI ${patient.dni}` : '')
+}
+
+export default function AgendaWeekly({
+  serviceScope,
+  baseTimeSlots,
+  canCreateSlot,
+}: {
+  serviceScope?: ServiceScope
+  baseTimeSlots?: string[]
+  canCreateSlot?: (dayIndex: number, time: string) => boolean
+} = {}) {
+  const currentEntity: ServiceScope = serviceScope || 'kinesiologia'
   const [currentDate, setCurrentDate] = useState<Date | null>(null)
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [showCompletionModal, setShowCompletionModal] = useState(false)
@@ -209,6 +280,10 @@ export default function AgendaWeekly() {
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [historyPatientName, setHistoryPatientName] = useState('')
   const [historyEntries, setHistoryEntries] = useState<PatientHistoryEntry[]>([])
+  const [historyTurnoId, setHistoryTurnoId] = useState<string | null>(null)
+  const [historyTurnoNotas, setHistoryTurnoNotas] = useState('')
+  const [historySaving, setHistorySaving] = useState(false)
+  const [historySaveError, setHistorySaveError] = useState<string | null>(null)
   const [specialties, setSpecialties] = useState<Specialty[]>([])
   const [showSpecialtyModal, setShowSpecialtyModal] = useState(false)
   const [selectedSpecialtyTurno, setSelectedSpecialtyTurno] = useState<Appointment | null>(null)
@@ -220,6 +295,14 @@ export default function AgendaWeekly() {
   const [sendCancelByWhatsApp, setSendCancelByWhatsApp] = useState(true)
   const [cancelSaving, setCancelSaving] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [createSlot, setCreateSlot] = useState<CreateSlotContext | null>(null)
+  const [manualTurnoForm, setManualTurnoForm] = useState<ManualTurnoForm>(defaultManualTurnoForm)
+  const [patientSearch, setPatientSearch] = useState('')
+  const [createSaving, setCreateSaving] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [patientOptions, setPatientOptions] = useState<PatientOption[]>([])
+  const [treatmentOptions, setTreatmentOptions] = useState<TreatmentOption[]>([])
   const [loading, setLoading] = useState(true)
 
   const cancelMessagePreview = selectedCancelTurno
@@ -227,10 +310,10 @@ export default function AgendaWeekly() {
     : ''
 
   const visibleTimeSlots = useMemo(() => {
-    const set = new Set<string>(TIME_SLOTS)
+    const set = new Set<string>(baseTimeSlots || TIME_SLOTS)
     appointments.forEach((appt) => set.add(appt.time))
     return Array.from(set).sort((left, right) => left.localeCompare(right))
-  }, [appointments])
+  }, [appointments, baseTimeSlots])
 
   useEffect(() => {
     // Inicializar con hoy (lunes de esta semana)
@@ -243,7 +326,39 @@ export default function AgendaWeekly() {
     // Cargar turnos de Supabase
     fetchAppointments(monday)
     fetchSpecialties()
+    fetchCreateFormOptions()
   }, [])
+
+  const fetchCreateFormOptions = async () => {
+    try {
+      const supabase = createClient()
+      const { data: patientsData, error: patientsError } = await supabase
+        .from('pacientes')
+        .select('id, nombre, apellido, dni')
+        .eq('entidad_id', currentEntity)
+        .order('apellido')
+        .order('nombre')
+
+      if (patientsError) throw patientsError
+      setPatientOptions((patientsData || []) as PatientOption[])
+
+      const { data: treatmentsData, error: treatmentsError } = await supabase
+        .from('tratamientos')
+        .select('id, paciente_id, servicio, estado, sesiones_totales, sesiones_realizadas')
+        .eq('entidad_id', currentEntity)
+        .order('created_at', { ascending: false })
+
+      if (treatmentsError) {
+        console.error('[v0] Error loading treatments for manual turnos:', treatmentsError)
+        setTreatmentOptions([])
+      } else {
+        setTreatmentOptions((treatmentsData || []) as TreatmentOption[])
+      }
+    } catch (error) {
+      console.error('[v0] Error loading options for manual turnos:', error)
+      setPatientOptions([])
+    }
+  }
 
   const fetchSpecialties = async () => {
     try {
@@ -281,7 +396,8 @@ export default function AgendaWeekly() {
 
       const { data: turnos } = await supabase
         .from('turnos')
-        .select('id, fecha, hora, estado, servicio, paciente_id, tratamiento_id, numero_sesion, asistido, cobrado, especialidad_id, especialidades(nombre, color), pacientes(nombre, apellido, telefono), usuarios(nombre, apellido), tratamientos(sesiones_totales)')
+        .select('id, fecha, hora, estado, entidad_id, servicio, paciente_id, tratamiento_id, numero_sesion, asistido, cobrado, notas, especialidad_id, especialidades(nombre, color), pacientes(nombre, apellido, telefono), usuarios(nombre, apellido), tratamientos(sesiones_totales)')
+        .eq('entidad_id', currentEntity)
         .gte('fecha', startStr)
         .lt('fecha', endExclusiveStr)
         .neq('estado', 'cancelado')
@@ -319,6 +435,7 @@ export default function AgendaWeekly() {
             id: t.id,
             date: String(t.fecha),
             estado: String(t.estado || ''),
+            entidad_id: t.entidad_id,
             day: dayIndex,
             time: timeValue,
             patient: patientName,
@@ -331,6 +448,7 @@ export default function AgendaWeekly() {
             sesiones_totales: t.tratamientos?.sesiones_totales || null,
             asistido: normalizeDbBoolean(t.asistido),
             cobrado: normalizeDbBoolean(t.cobrado),
+            notas: t.notas || null,
             especialidad_id: t.especialidad_id,
             especialidad_nombre: t.especialidades?.nombre || null,
             especialidad_color: t.especialidades?.color || null,
@@ -344,7 +462,7 @@ export default function AgendaWeekly() {
           const isCompleted = appointment.estado === 'realizado' || appointment.estado === 'completado'
           const unattendedAndUncharged = appointment.asistido === false && appointment.cobrado === false
           // Regla: una sesión completada sin asistido y sin cobrado desaparece de la agenda.
-          if (isCompleted && unattendedAndUncharged) {
+          if (currentEntity !== 'traumatologia' && isCompleted && unattendedAndUncharged) {
             return false
           }
 
@@ -398,6 +516,10 @@ export default function AgendaWeekly() {
   }
 
   const handleOpenPatientHistory = async (appt: Appointment) => {
+    setHistoryTurnoId(appt.id)
+    setHistoryTurnoNotas(appt.notas || '')
+    setHistorySaveError(null)
+
     if (!appt.paciente_id) {
       setHistoryPatientName(appt.patient)
       setHistoryEntries([])
@@ -416,7 +538,7 @@ export default function AgendaWeekly() {
       const supabase = createClient()
       const { data, error } = await supabase
         .from('turnos')
-        .select('id, fecha, hora, estado, servicio, numero_sesion, usuarios(nombre, apellido)')
+        .select('id, fecha, hora, estado, servicio, numero_sesion, notas, usuarios(nombre, apellido)')
         .eq('paciente_id', appt.paciente_id)
         .order('fecha', { ascending: false })
         .order('hora', { ascending: false })
@@ -431,6 +553,7 @@ export default function AgendaWeekly() {
         estado: String(entry.estado),
         servicio: String(entry.servicio),
         numero_sesion: entry.numero_sesion ? Number(entry.numero_sesion) : null,
+        notas: entry.notas || null,
         profesional: entry.usuarios
           ? `${entry.usuarios.nombre || ''} ${entry.usuarios.apellido || ''}`.trim() || 'Sin asignar'
           : 'Sin asignar',
@@ -442,6 +565,37 @@ export default function AgendaWeekly() {
       setHistoryError('No se pudo cargar el historial clínico del paciente.')
     } finally {
       setHistoryLoading(false)
+    }
+  }
+
+  const handleSaveTurnoObservation = async () => {
+    if (!historyTurnoId) return
+
+    try {
+      setHistorySaving(true)
+      setHistorySaveError(null)
+
+      const supabase = createClient()
+      const observation = historyTurnoNotas.trim()
+      const { error } = await supabase
+        .from('turnos')
+        .update({ notas: observation || null })
+        .eq('id', historyTurnoId)
+
+      if (error) throw error
+
+      setAppointments((current) => current.map((appt) => (
+        appt.id === historyTurnoId ? { ...appt, notas: observation || null } : appt
+      )))
+
+      setHistoryEntries((current) => current.map((entry) => (
+        entry.id === historyTurnoId ? { ...entry, notas: observation || null } : entry
+      )))
+    } catch (error) {
+      console.error('[v0] Error saving clinical observation:', error)
+      setHistorySaveError('No se pudo guardar la observación clínica del turno.')
+    } finally {
+      setHistorySaving(false)
     }
   }
 
@@ -537,6 +691,82 @@ export default function AgendaWeekly() {
     }
   }
 
+  const availableTreatmentsForPatient = useMemo(() => {
+    if (!manualTurnoForm.paciente_id) return []
+    return treatmentOptions.filter((treatment) => treatment.paciente_id === manualTurnoForm.paciente_id)
+  }, [manualTurnoForm.paciente_id, treatmentOptions])
+
+  const filteredPatientOptions = useMemo(() => {
+    const term = normalizeSearchText(patientSearch)
+    if (!term) return patientOptions.slice(0, 20)
+
+    return patientOptions.filter((patient) => {
+      const fullName = normalizeSearchText(`${patient.nombre || ''} ${patient.apellido || ''}`)
+      const dni = normalizeSearchText(patient.dni)
+      return fullName.includes(term) || dni.includes(term)
+    }).slice(0, 20)
+  }, [patientOptions, patientSearch])
+
+  const handleOpenCreateModal = (dayIndex: number, time: string) => {
+    const slotDate = weekDays[dayIndex]
+    setCreateSlot({
+      dayIndex,
+      time,
+      date: formatDateForDb(slotDate),
+    })
+    setManualTurnoForm(defaultManualTurnoForm)
+    setPatientSearch('')
+    setCreateError(null)
+    setShowCreateModal(true)
+  }
+
+  const handleCreateTurno = async () => {
+    if (!createSlot) return
+
+    if (!manualTurnoForm.paciente_id) {
+      setCreateError('Seleccioná un paciente para crear el turno.')
+      return
+    }
+
+    try {
+      setCreateSaving(true)
+      setCreateError(null)
+
+      const supabase = createClient()
+      const payload = {
+        paciente_id: manualTurnoForm.paciente_id,
+        tratamiento_id: manualTurnoForm.tratamiento_id || null,
+        entidad_id: currentEntity,
+        servicio: currentEntity,
+        numero_sesion: manualTurnoForm.numero_sesion ? Number(manualTurnoForm.numero_sesion) : null,
+        fecha: createSlot.date,
+        hora: `${createSlot.time}:00`,
+        estado: 'pendiente',
+        asistido: false,
+        cobrado: false,
+        monto_pagado: manualTurnoForm.monto_pagado ? Math.max(0, Number(manualTurnoForm.monto_pagado)) : null,
+        notas: manualTurnoForm.notas.trim() || null,
+        especialidad_id: null,
+      }
+
+      const { error } = await supabase
+        .from('turnos')
+        .insert(payload)
+
+      if (error) throw error
+
+      setShowCreateModal(false)
+      setCreateSlot(null)
+      setManualTurnoForm(defaultManualTurnoForm)
+      await fetchAppointments(currentDate || new Date())
+    } catch (error: any) {
+      console.error('[v0] Error creating manual turno:', error)
+      setCreateError(error?.message || 'No se pudo crear el turno manualmente.')
+    } finally {
+      setCreateSaving(false)
+    }
+  }
+
   const getAppointmentsForSlot = (day: number, time: string) => {
     return appointments.filter(a => a.day === day && a.time === time)
   }
@@ -597,10 +827,27 @@ export default function AgendaWeekly() {
                   return (
                     <td key={`${dayIndex}-${time}`} className="p-1 border border-border min-h-14 align-top">
                       <div className="space-y-0.5">
+                        {slotsAppts.length === 0 ? (
+                          !canCreateSlot || canCreateSlot(dayIndex, time) ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-full justify-center text-[11px] text-muted-foreground"
+                              onClick={() => handleOpenCreateModal(dayIndex, time)}
+                              title="Crear turno manual"
+                            >
+                              <Plus className="w-3 h-3 mr-1" />
+                              Crear
+                            </Button>
+                          ) : null
+                        ) : null}
                         {slotsAppts.map((appt) => {
+                          const isCompleted = appt.estado === 'realizado' || appt.estado === 'completado'
                           const unattendedButCharged = appt.asistido === false && appt.cobrado === true
                           const useSpecialtyStyle = Boolean(appt.especialidad_color) && !unattendedButCharged
-                          const bgColor = appt.asistido
+                          const bgColor = currentEntity === 'traumatologia' && isCompleted
+                            ? 'bg-green-500/20 border border-green-500/40'
+                            : appt.asistido
                             ? 'bg-green-500/20 border border-green-500/40'
                             : unattendedButCharged
                             ? 'bg-red-500/20 border border-red-500/40'
@@ -626,7 +873,6 @@ export default function AgendaWeekly() {
                                   Sesión {appt.numero_sesion}/{appt.sesiones_totales}
                                 </div>
                               ) : null}
-                              <div className="text-muted-foreground text-[10px] leading-tight truncate">{appt.professional}</div>
                               <div className="flex gap-0.5 mt-0.5">
                                 <Button size="sm" variant="ghost" className="h-4 px-1 text-[10px]" onClick={() => handleCompleteAppointment(appt)}>
                                   <Check className="w-2.5 h-2.5" />
@@ -677,6 +923,7 @@ export default function AgendaWeekly() {
         open={showCompletionModal}
         onOpenChange={setShowCompletionModal}
         turno={selectedTurno}
+        entidadId={currentEntity}
         onComplete={() => {
           setShowCompletionModal(false)
           fetchAppointments(currentDate || new Date())
@@ -699,21 +946,44 @@ export default function AgendaWeekly() {
           ) : historyEntries.length === 0 ? (
             <p className="text-sm text-muted-foreground">Sin historial registrado.</p>
           ) : (
-            <div className="max-h-[420px] overflow-y-auto space-y-2 pr-1">
-              {historyEntries.map((entry) => (
-                <div key={entry.id} className="rounded-lg border border-border bg-secondary/40 p-3 text-sm">
-                  <div className="flex flex-wrap gap-3">
-                    <span className="font-medium">{entry.fecha}</span>
-                    <span>{String(entry.hora).slice(0, 5)} hs</span>
-                    <span>{serviceLabels[entry.servicio] || entry.servicio}</span>
-                    <span>Estado: {entry.estado}</span>
-                  </div>
-                  {entry.numero_sesion ? (
-                    <div className="text-muted-foreground mt-1">Sesión planificada: #{entry.numero_sesion}</div>
-                  ) : null}
-                  <div className="text-muted-foreground mt-1">Profesional: {entry.profesional}</div>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-border bg-secondary/30 p-3">
+                <label className="text-sm font-medium">Observaciones del turno seleccionado</label>
+                <textarea
+                  value={historyTurnoNotas}
+                  onChange={(e) => setHistoryTurnoNotas(e.target.value)}
+                  className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-24"
+                  placeholder="Escribí aquí observaciones clínicas de este turno..."
+                />
+                {historySaveError ? (
+                  <p className="text-sm text-destructive mt-2">{historySaveError}</p>
+                ) : null}
+                <div className="flex justify-end mt-2">
+                  <Button size="sm" onClick={handleSaveTurnoObservation} disabled={historySaving || !historyTurnoId}>
+                    {historySaving ? 'Guardando...' : 'Guardar observación'}
+                  </Button>
                 </div>
-              ))}
+              </div>
+
+              <div className="max-h-[360px] overflow-y-auto space-y-2 pr-1">
+                {historyEntries.map((entry) => (
+                  <div key={entry.id} className="rounded-lg border border-border bg-secondary/40 p-3 text-sm">
+                    <div className="flex flex-wrap gap-3">
+                      <span className="font-medium">{entry.fecha}</span>
+                      <span>{String(entry.hora).slice(0, 5)} hs</span>
+                      <span>{serviceLabels[entry.servicio] || entry.servicio}</span>
+                      <span>Estado: {entry.estado}</span>
+                    </div>
+                    {entry.numero_sesion ? (
+                      <div className="text-muted-foreground mt-1">Sesión planificada: #{entry.numero_sesion}</div>
+                    ) : null}
+                    <div className="text-muted-foreground mt-1">Profesional: {entry.profesional}</div>
+                    {entry.notas ? (
+                      <div className="text-muted-foreground mt-1">Observación: {entry.notas}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </DialogContent>
@@ -799,6 +1069,121 @@ export default function AgendaWeekly() {
                 {cancelSaving ? 'Cancelando...' : 'Confirmar cancelación'}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Crear turno manual</DialogTitle>
+            <DialogDescription>
+              {createSlot
+                ? `Nuevo turno para ${DAYS[createSlot.dayIndex]} ${createSlot.date} a las ${createSlot.time} hs`
+                : 'Completá los datos del turno manual'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div className="md:col-span-2">
+              <label className="text-sm font-medium">Buscar paciente</label>
+              <input
+                type="text"
+                value={patientSearch}
+                onChange={(e) => {
+                  setPatientSearch(e.target.value)
+                  setManualTurnoForm((current) => ({ ...current, paciente_id: '', tratamiento_id: '' }))
+                }}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                placeholder="Escribí nombre, apellido o DNI"
+              />
+              <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-border bg-background">
+                {filteredPatientOptions.map((patient) => (
+                  <button
+                    key={patient.id}
+                    type="button"
+                    onClick={() => {
+                      setManualTurnoForm((current) => ({ ...current, paciente_id: patient.id, tratamiento_id: '' }))
+                      setPatientSearch(formatPatientOptionLabel(patient))
+                    }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary ${manualTurnoForm.paciente_id === patient.id ? 'bg-secondary' : ''}`}
+                  >
+                    {formatPatientOptionLabel(patient)}
+                  </button>
+                ))}
+                {filteredPatientOptions.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">No se encontraron pacientes con ese criterio.</p>
+                ) : null}
+              </div>
+              {manualTurnoForm.paciente_id ? (
+                <p className="text-xs text-primary mt-1">Paciente seleccionado correctamente.</p>
+              ) : null}
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Tratamiento (tratamiento_id)</label>
+              <select
+                value={manualTurnoForm.tratamiento_id}
+                onChange={(e) => {
+                  const selectedTreatmentId = e.target.value
+                  const selectedTreatment = availableTreatmentsForPatient.find((item) => item.id === selectedTreatmentId)
+                  setManualTurnoForm((current) => ({
+                    ...current,
+                    tratamiento_id: selectedTreatmentId,
+                    numero_sesion: selectedTreatment
+                      ? String(Math.min(selectedTreatment.sesiones_totales, selectedTreatment.sesiones_realizadas + 1))
+                      : current.numero_sesion,
+                  }))
+                }}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Sin tratamiento</option>
+                {availableTreatmentsForPatient.map((treatment) => (
+                  <option key={treatment.id} value={treatment.id}>
+                    {`${serviceLabels[treatment.servicio] || treatment.servicio} - ${treatment.estado} (${treatment.sesiones_realizadas}/${treatment.sesiones_totales})`}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Número de sesión</label>
+              <input
+                type="number"
+                min="1"
+                value={manualTurnoForm.numero_sesion}
+                onChange={(e) => setManualTurnoForm((current) => ({ ...current, numero_sesion: e.target.value }))}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                placeholder="Opcional"
+              />
+            </div>
+
+            <div className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-sm text-muted-foreground md:col-span-2">
+              El turno se crea con estado <strong>pendiente</strong> y sin especialidad. Luego podés colorearlo con el botón de paleta.
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="text-sm font-medium">Notas</label>
+              <textarea
+                value={manualTurnoForm.notas}
+                onChange={(e) => setManualTurnoForm((current) => ({ ...current, notas: e.target.value }))}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-24"
+                placeholder="Opcional"
+              />
+            </div>
+          </div>
+
+          {createError ? (
+            <p className="text-sm text-destructive">{createError}</p>
+          ) : null}
+
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="outline" onClick={() => setShowCreateModal(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleCreateTurno} disabled={createSaving}>
+              {createSaving ? 'Guardando...' : 'Guardar turno'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

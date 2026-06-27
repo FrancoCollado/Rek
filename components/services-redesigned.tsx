@@ -7,7 +7,7 @@ const servicios = [
     icon: Hand
   },
   {
-    title: "Entrenamiento guiado",
+    title: "Entrenamiento de fuerza personalizado",
     description: "Trabajo de forma supervisada para mejorar rendimiento físico y complementar la recuperación.",
     icon: Activity
   },
@@ -27,7 +27,7 @@ export function ServicesSection() {
             Servicios que transforman
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl">
-            Ofrecemos un tratamiento integral que combina terapia especializada con entrenamiento guiado
+            Ofrecemos un tratamiento integral que combina terapia especializada con entrenamiento de fuerza personalizado
           </p>
         </div>
 

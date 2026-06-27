@@ -3,10 +3,10 @@
 -- Fecha: 2026-06-19
 -- ============================================================
 -- Reglas:
--- - Turnos solo en bloques de :00 o :30
--- - 12:00 a 15:30 inclusive: maximo 1 turno por bloque
--- - Resto de bloques en :00: maximo 3 turnos
--- - Resto de bloques en :30: maximo 2 turnos
+-- - Turnos solo en bloques de :00, :15 o :30
+-- - Bloques en :00: maximo 2 turnos
+-- - Bloques en :15: maximo 1 turno
+-- - Bloques en :30: maximo 2 turnos
 
 BEGIN;
 
@@ -16,12 +16,12 @@ LANGUAGE plpgsql
 IMMUTABLE
 AS $$
 BEGIN
-  IF p_hora >= TIME '12:00' AND p_hora < TIME '16:00' THEN
-    RETURN 1;
+  IF EXTRACT(MINUTE FROM p_hora) = 0 THEN
+    RETURN 2;
   END IF;
 
-  IF EXTRACT(MINUTE FROM p_hora) = 0 THEN
-    RETURN 3;
+  IF EXTRACT(MINUTE FROM p_hora) = 15 THEN
+    RETURN 1;
   END IF;
 
   IF EXTRACT(MINUTE FROM p_hora) = 30 THEN
@@ -48,7 +48,7 @@ BEGIN
   v_maximo := public.turnos_maximo_por_bloque(NEW.hora);
 
   IF v_maximo = 0 THEN
-    RAISE EXCEPTION 'Horario invalido: % (solo se permiten bloques en punto o y media)', NEW.hora
+    RAISE EXCEPTION 'Horario invalido: % (solo se permiten bloques en punto, y cuarto o y media)', NEW.hora
       USING ERRCODE = '23514';
   END IF;
 

@@ -17,6 +17,7 @@ interface TurnoCompletionModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   turno: any
+  entidadId?: 'kinesiologia' | 'traumatologia'
   onComplete: () => void
 }
 
@@ -35,8 +36,11 @@ export default function TurnoCompletionModal({
   open,
   onOpenChange,
   turno,
+  entidadId = 'kinesiologia',
   onComplete,
 }: TurnoCompletionModalProps) {
+  const isTraumatologia = entidadId === 'traumatologia'
+
   const normalizeBoolean = (value: unknown, fallback = false) => {
     if (value === true || value === false) return value
     if (typeof value === 'string') {
@@ -84,6 +88,7 @@ export default function TurnoCompletionModal({
         .from('saldo_paciente')
         .select('saldo_deuda, sesiones_pendientes')
         .eq('paciente_id', turno.paciente_id)
+        .eq('entidad_id', entidadId)
         .maybeSingle()
 
       if (turno.tratamiento_id) {
@@ -123,6 +128,20 @@ export default function TurnoCompletionModal({
     setLoading(true)
     try {
       const supabase = createClient()
+
+      if (isTraumatologia) {
+        await supabase
+          .from('turnos')
+          .update({
+            estado: 'realizado',
+          })
+          .eq('id', turno.id)
+
+        onOpenChange(false)
+        onComplete()
+        return
+      }
+
       const isMarkedAsCharged = cobrado
       const descuentoCuentaCorriente = usarImporte
         ? Math.max(0, Number.parseFloat(importeDescuento || '0'))
@@ -182,10 +201,11 @@ export default function TurnoCompletionModal({
         .from('saldo_paciente')
         .upsert({
           paciente_id: turno.paciente_id,
+          entidad_id: entidadId,
           saldo_deuda: nuevoSaldo,
           sesiones_pendientes: nuevosSesiones,
         }, {
-          onConflict: 'paciente_id'
+          onConflict: 'paciente_id,entidad_id'
         })
 
       onOpenChange(false)
@@ -203,86 +223,100 @@ export default function TurnoCompletionModal({
         <DialogHeader>
           <DialogTitle>Completar turno</DialogTitle>
           <DialogDescription>
-            Al guardar, el turno queda como realizado y se registran los cambios en asistido/cobrado.
+            {isTraumatologia
+              ? 'Al guardar, el turno queda marcado como completado.'
+              : 'Al guardar, el turno queda como realizado y se registran los cambios en asistido/cobrado.'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="bg-muted p-4 rounded-lg">
-            <p className="text-sm text-muted-foreground mb-2">Paciente: {turno?.patient}</p>
-            {tratamiento ? (
-              <p className="text-xs text-muted-foreground mb-2">
-                Tratamiento activo: {tratamiento.sesiones_realizadas}/{tratamiento.sesiones_totales} sesiones realizadas
+          {isTraumatologia ? (
+            <div className="bg-muted p-4 rounded-lg">
+              <p className="text-sm text-muted-foreground">
+                Paciente: {turno?.patient}
               </p>
-            ) : null}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Adeuda</p>
-                <p className="text-xl font-bold">${saldo.deuda.toFixed(2)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Sesiones pendientes</p>
-                <p className="text-xl font-bold">{saldo.sesiones}</p>
-              </div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Fecha y hora: {turno?.date} {turno?.time} hs
+              </p>
             </div>
-          </div>
-
-          <div className="space-y-3">
-            <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
-              <input
-                type="checkbox"
-                checked={asistido}
-                onChange={(e) => setAsistido(e.target.checked)}
-                className="w-4 h-4"
-              />
-              <span className="text-sm font-medium">Asistido</span>
-            </label>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
-                <input
-                  type="checkbox"
-                  checked={cobrado}
-                  onChange={(e) => {
-                    setCobrado(e.target.checked)
-                  }}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm font-medium">Cobrado $6.000</span>
-              </label>
-            </div>
-
-            <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
-              <input
-                type="checkbox"
-                checked={usarImporte}
-                onChange={(e) => {
-                  const checked = e.target.checked
-                  setUsarImporte(checked)
-                  if (!checked) {
-                    setImporteDescuento('')
-                  }
-                }}
-                className="w-4 h-4"
-              />
-              <span className="text-sm font-medium">Importe (descontar cuenta corriente)</span>
-            </label>
-
-            {usarImporte && (
-              <div>
-                <label className="text-sm font-medium">Monto a descontar</label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={importeDescuento}
-                  onChange={(e) => setImporteDescuento(e.target.value)}
-                  placeholder="Ej: 2000"
-                  className="mt-1"
-                />
+          ) : (
+            <>
+              <div className="bg-muted p-4 rounded-lg">
+                <p className="text-sm text-muted-foreground mb-2">Paciente: {turno?.patient}</p>
+                {tratamiento ? (
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Tratamiento activo: {tratamiento.sesiones_realizadas}/{tratamiento.sesiones_totales} sesiones realizadas
+                  </p>
+                ) : null}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Adeuda</p>
+                    <p className="text-xl font-bold">${saldo.deuda.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Sesiones pendientes</p>
+                    <p className="text-xl font-bold">{saldo.sesiones}</p>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    checked={asistido}
+                    onChange={(e) => setAsistido(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm font-medium">Asistido</span>
+                </label>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
+                    <input
+                      type="checkbox"
+                      checked={cobrado}
+                      onChange={(e) => {
+                        setCobrado(e.target.checked)
+                      }}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm font-medium">Cobrado por cuenta</span>
+                  </label>
+                </div>
+
+                <label className="flex items-center gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    checked={usarImporte}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      setUsarImporte(checked)
+                      if (!checked) {
+                        setImporteDescuento('')
+                      }
+                    }}
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm font-medium">Importe (descontar cuenta corriente)</span>
+                </label>
+
+                {usarImporte && (
+                  <div>
+                    <label className="text-sm font-medium">Monto a descontar</label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={importeDescuento}
+                      onChange={(e) => setImporteDescuento(e.target.value)}
+                      placeholder="Ej: 2000"
+                      className="mt-1"
+                    />
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <DialogFooter>
