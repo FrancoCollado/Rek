@@ -305,7 +305,7 @@ export function Booking() {
     const date = new Date(currentYear, currentMonth, day)
     const dayOfWeek = date.getDay()
 
-    if (date < today || dayOfWeek === 0 || !selectedService) {
+    if (date < today || dayOfWeek === 0 || dayOfWeek === 6 || !selectedService) {
       return true
     }
 

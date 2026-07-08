@@ -225,7 +225,7 @@ export default function TurnoCompletionModal({
           <DialogDescription>
             {isTraumatologia
               ? 'Al guardar, el turno queda marcado como completado.'
-              : 'Al guardar, el turno queda como realizado y se registran los cambios en asistido/cobrado.'}
+              : 'Al guardar, el turno queda como realizado y se registran los cambios en asistido/cuenta.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -280,7 +280,7 @@ export default function TurnoCompletionModal({
                       }}
                       className="w-4 h-4"
                     />
-                    <span className="text-sm font-medium">Cobrado por cuenta</span>
+                    <span className="text-sm font-medium">Cuenta</span>
                   </label>
                 </div>
 

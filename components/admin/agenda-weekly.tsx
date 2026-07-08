@@ -21,7 +21,7 @@ const TIME_SLOTS = Array.from({ length: 27 }, (_, i) => {
   const minutes = minutesFromStart % 60
   return `${String(hour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
 })
-const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
 
 type ServiceScope = 'kinesiologia' | 'traumatologia'
 

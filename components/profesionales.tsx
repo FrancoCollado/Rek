@@ -1,23 +1,84 @@
 import Image from "next/image"
 
-const profesionales = [
+type Profesional = {
+  nombre: string
+  matricula?: string
+  foto?: string
+}
+
+type Area = {
+  area: string
+  profesionales: Profesional[]
+}
+
+const areas: Area[] = [
   {
-    nombre: "Busso Franco",
-    titulo: "Licenciado en Kinesiología y Fisiatría",
-    matricula: "MAT 1610/2",
-    especialidades: ["Terapia Manual ONM", "Rehabilitación vestibular", "Kinesiología Deportiva"],
-    desde: "2014",
-    foto: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-WR6hN46glSc94sqSogqkS0Va3Eicyv.png"
+    area: "Kinesiología",
+    profesionales: [
+      {
+        nombre: "Busso Franco",
+        matricula: "MAT 1610/2",
+        foto: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-WR6hN46glSc94sqSogqkS0Va3Eicyv.png"
+      },
+      {
+        nombre: "Grigioni Juan Manuel",
+        matricula: "MAT 1556/2",
+        foto: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-dMFbQ3kYUtpQHyFvCaYDLDSvVOzZzB.png"
+      },
+      {
+        nombre: "Graff Valentín",
+        matricula: "MAT 3301/2"
+      }
+    ]
   },
   {
-    nombre: "Grigioni Juan Manuel",
-    titulo: "Licenciado en Kinesiología y Fisiatría",
-    matricula: "MAT 1556/2",
-    especialidades: ["Terapia Manual ONM", "RPG", "Kinesiología Deportiva"],
-    desde: "2014",
-    foto: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-dMFbQ3kYUtpQHyFvCaYDLDSvVOzZzB.png"
+    area: "Gimnasio",
+    profesionales: [
+      { nombre: "Colombo Matías" },
+      { nombre: "Lliera Ligia" },
+      { nombre: "Serra Rocío" },
+      { nombre: "Fabello Giuliano" }
+    ]
+  },
+  {
+    area: "Traumatología",
+    profesionales: [
+      { nombre: "Stivala Yanina", matricula: "MAT 16040" }
+    ]
+  },
+  {
+    area: "Nutrición Deportiva e Integral",
+    profesionales: [
+      { nombre: "Giuliato Edith", matricula: "MAT 2286/2" },
+      { nombre: "Sule Fernanda" }
+    ]
+  },
+  {
+    area: "Plantillas Ortopédicas",
+    profesionales: [
+      { nombre: "Rodríguez Raúl" }
+    ]
+  },
+  {
+    area: "Pilates",
+    profesionales: [
+      { nombre: "Ruzzo Luciana" },
+      { nombre: "Lorenzo Federico" }
+    ]
+  },
+  {
+    area: "Secretaría",
+    profesionales: [
+      { nombre: "Larrubia Jésica" }
+    ]
   }
 ]
+
+function getInitials(nombre: string) {
+  const parts = nombre.trim().split(" ")
+  if (parts.length === 1) return parts[0][0].toUpperCase()
+  return (parts[0][0] + parts[1][0]).toUpperCase()
+}
 
 export function Profesionales() {
   return (
@@ -33,41 +94,36 @@ export function Profesionales() {
         </div>
 
         <div className="grid md:grid-cols-2 gap-8">
-          {profesionales.map((prof, idx) => (
+          {areas.map((grupo, idx) => (
             <div key={idx} className="bg-background p-8 rounded-lg border border-border">
-              <div className="flex items-start gap-4 mb-6">
-                <div className="w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center flex-shrink-0 overflow-hidden">
-                  {prof.foto ? (
-                    <Image 
-                      src={prof.foto}
-                      alt={prof.nombre}
-                      width={48}
-                      height={48}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : null}
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold">{prof.nombre}</h3>
-                  <p className="text-sm text-muted-foreground">{prof.titulo}</p>
-                  <p className="text-xs text-muted-foreground font-mono">{prof.matricula}</p>
-                </div>
-              </div>
-
-              <div className="mb-4">
-                <p className="text-sm font-medium text-foreground mb-2">Especialidades</p>
-                <div className="flex flex-wrap gap-2">
-                  {prof.especialidades.map((esp, i) => (
-                    <span key={i} className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full">
-                      {esp}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <p className="text-sm text-muted-foreground">
-                En REK desde <span className="font-bold">{prof.desde}</span>
-              </p>
+              <h3 className="text-lg font-bold mb-5 text-primary border-b border-border pb-3">
+                {grupo.area}
+              </h3>
+              <ul className="space-y-4">
+                {grupo.profesionales.map((prof, i) => (
+                  <li key={i} className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-primary/10 text-primary flex items-center justify-center flex-shrink-0 overflow-hidden text-xs font-bold">
+                      {prof.foto ? (
+                        <Image
+                          src={prof.foto}
+                          alt={prof.nombre}
+                          width={36}
+                          height={36}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        getInitials(prof.nombre)
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium leading-tight">{prof.nombre}</p>
+                      {prof.matricula && (
+                        <p className="text-xs text-muted-foreground font-mono">{prof.matricula}</p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>

@@ -1,9 +1,9 @@
 -- ============================================================
--- SEED: servicios configurados para booking (lunes a sabado)
+-- SEED: servicios configurados para booking (lunes a viernes)
 -- ============================================================
 -- Objetivo:
 -- 1) Asegurar profesionales activos (rol = kinesiologo)
--- 2) Configurar disponibilidad: lunes a viernes 07:00-20:00, sabado 09:00-13:00
+-- 2) Configurar disponibilidad: lunes a viernes 07:00-20:00
 -- 3) Agenda con intervalos de 15 minutos
 -- 4) Script idempotente
 
@@ -61,9 +61,8 @@ CROSS JOIN (
     (2, '07:00'::time, '20:00'::time),
     (3, '07:00'::time, '20:00'::time),
     (4, '07:00'::time, '20:00'::time),
-    (5, '07:00'::time, '20:00'::time),
-    (6, '09:00'::time, '13:00'::time)
-) AS d(dia_semana, hora_inicio, hora_fin) -- 1=lunes ... 6=sabado
+    (5, '07:00'::time, '20:00'::time)
+) AS d(dia_semana, hora_inicio, hora_fin) -- 1=lunes ... 5=viernes
 WHERE u.rol = 'kinesiologo'
   AND u.activo = TRUE;
 

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS disponibilidad_profesional (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   usuario_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
   servicio TEXT NOT NULL CHECK (servicio IN ('kinesiologia', 'traumatologia')),
-  dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 1 AND 6),
+  dia_semana INTEGER NOT NULL CHECK (dia_semana BETWEEN 1 AND 5),
   hora_inicio TIME NOT NULL,
   hora_fin TIME NOT NULL,
   intervalo_minutos INTEGER NOT NULL DEFAULT 30,
