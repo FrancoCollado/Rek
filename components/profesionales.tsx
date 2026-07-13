@@ -27,7 +27,8 @@ const areas: Area[] = [
       },
       {
         nombre: "Graff Valentín",
-        matricula: "MAT 3301/2"
+        matricula: "MAT 3301/2",
+        foto: "/VALENTIN.jpeg"
       }
     ]
   },
@@ -36,8 +37,8 @@ const areas: Area[] = [
     profesionales: [
       { nombre: "Colombo Matías" },
       { nombre: "Lliera Ligia" },
-      { nombre: "Serra Rocío" },
-      { nombre: "Fabello Giuliano" }
+      { nombre: "Serra Rocío", foto: "/ROCÍO.JPG" },
+      { nombre: "Fabello Giuliano", foto: "/GIULIANO.JPG" }
     ]
   },
   {

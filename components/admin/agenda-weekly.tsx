@@ -15,12 +15,20 @@ import { ChevronLeft, ChevronRight, Check, FileText, Palette, Plus, XCircle } fr
 import { createClient } from '@/lib/supabase/client'
 import TurnoCompletionModal from '@/components/admin/turno-completion-modal'
 
-const TIME_SLOTS = Array.from({ length: 27 }, (_, i) => {
-  const minutesFromStart = i * 30
-  const hour = 7 + Math.floor(minutesFromStart / 60)
-  const minutes = minutesFromStart % 60
-  return `${String(hour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
-})
+// Bloques válidos: :00 (2 cupos), :15 (1 cupo), :30 (2 cupos). Sin :45.
+const TIME_SLOTS = Array.from({ length: 14 }, (_, h) => h + 7).flatMap((h) =>
+  h < 20
+    ? [0, 15, 30].map((m) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+    : ['20:00']
+)
+
+function getSlotCapacity(time: string): number {
+  const m = parseInt(time.split(':')[1], 10)
+  if (m === 0) return 2
+  if (m === 15) return 1
+  if (m === 30) return 2
+  return 1
+}
 const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
 
 type ServiceScope = 'kinesiologia' | 'traumatologia'
@@ -821,25 +829,26 @@ export default function AgendaWeekly({
               </tr>
             ) : visibleTimeSlots.map((time) => (
               <tr key={time}>
-                <td className="p-2 text-xs font-medium border border-border bg-secondary text-center">{time}</td>
+                <td className="p-2 text-xs font-medium border border-border bg-secondary text-center">
+                  <div>{time}</div>
+                  <div className="text-[9px] text-muted-foreground">×{getSlotCapacity(time)}</div>
+                </td>
                 {DAYS.map((_, dayIndex) => {
                   const slotsAppts = getAppointmentsForSlot(dayIndex, time)
                   return (
                     <td key={`${dayIndex}-${time}`} className="p-1 border border-border min-h-14 align-top">
                       <div className="space-y-0.5">
-                        {slotsAppts.length === 0 ? (
-                          !canCreateSlot || canCreateSlot(dayIndex, time) ? (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 w-full justify-center text-[11px] text-muted-foreground"
-                              onClick={() => handleOpenCreateModal(dayIndex, time)}
-                              title="Crear turno manual"
-                            >
-                              <Plus className="w-3 h-3 mr-1" />
-                              Crear
-                            </Button>
-                          ) : null
+                        {slotsAppts.length < getSlotCapacity(time) && (!canCreateSlot || canCreateSlot(dayIndex, time)) ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 w-full justify-center text-[11px] text-muted-foreground"
+                            onClick={() => handleOpenCreateModal(dayIndex, time)}
+                            title="Crear turno manual"
+                          >
+                            <Plus className="w-3 h-3 mr-1" />
+                            {slotsAppts.length === 0 ? 'Crear' : `Agregar (${slotsAppts.length}/${getSlotCapacity(time)})`}
+                          </Button>
                         ) : null}
                         {slotsAppts.map((appt) => {
                           const isCompleted = appt.estado === 'realizado' || appt.estado === 'completado'

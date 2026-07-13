@@ -13,6 +13,7 @@ interface Patient {
   apellido: string
   email: string | null
   telefono: string
+  obra_social: string | null
 }
 
 interface Treatment {
@@ -50,6 +51,7 @@ type PatientForm = {
   apellido: string
   email: string
   telefono: string
+  obra_social: string
 }
 
 type TreatmentForm = {
@@ -67,6 +69,7 @@ const defaultPatientForm: PatientForm = {
   apellido: '',
   email: '',
   telefono: '',
+  obra_social: '',
 }
 
 function buildDefaultTreatmentForm(serviceScope?: ServiceScope): TreatmentForm {
@@ -124,7 +127,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
       ] = await Promise.all([
         supabase
           .from('pacientes')
-          .select('id, nombre, apellido, email, telefono')
+          .select('id, nombre, apellido, email, telefono, obra_social')
           .eq('entidad_id', currentEntity)
           .order('apellido')
           .order('nombre'),
@@ -226,6 +229,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
       apellido: patient.apellido,
       email: patient.email || '',
       telefono: patient.telefono,
+      obra_social: patient.obra_social || '',
     })
     setEditingId(patient.id)
     setShowPatientForm(true)
@@ -264,6 +268,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
         apellido: patientForm.apellido.trim(),
         email: patientForm.email.trim() || null,
         telefono: patientForm.telefono.trim(),
+        obra_social: patientForm.obra_social.trim() || null,
       }
 
       if (editingId) {
@@ -401,6 +406,14 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
                 required
               />
             </div>
+            <div>
+              <label className="text-sm font-medium">Obra social</label>
+              <Input
+                value={patientForm.obra_social}
+                onChange={(e) => setPatientForm({ ...patientForm, obra_social: e.target.value })}
+                placeholder="Opcional (ej: IAPOS, OSDE, Swiss Medical)"
+              />
+            </div>
             <div className="md:col-span-2 flex gap-2 justify-end">
               <Button type="button" variant="outline" onClick={() => setShowPatientForm(false)}>
                 Cancelar
@@ -447,6 +460,9 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
                         <div className="flex flex-wrap gap-3 text-sm text-muted-foreground mt-1">
                           <span>{patient.email || 'Sin email'}</span>
                           <span>{patient.telefono}</span>
+                          <span className="bg-secondary px-2 py-0.5 rounded text-xs">
+                            {patient.obra_social ? patient.obra_social : 'Sin obra social'}
+                          </span>
                           {activeTreatment ? (
                             <>
                               <span className="bg-primary/20 text-primary px-2 py-1 rounded">
