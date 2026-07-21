@@ -16,7 +16,7 @@ export default function AdminSidebar() {
   }
 
   const navItems = [
-    { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
+    { href: '/admin', label: 'Inicio', icon: LayoutDashboard },
     { href: '/admin/agenda', label: 'Agenda', icon: Calendar },
     { href: '/admin/pacientes', label: 'Pacientes', icon: Users },
     { href: '/admin/caja', label: 'Caja', icon: DollarSign },

@@ -16,7 +16,7 @@ export default function AdminTraumatologiaSidebar() {
   }
 
   const navItems = [
-    { href: '/admin-traumatologia', label: 'Dashboard', icon: LayoutDashboard },
+    { href: '/admin-traumatologia', label: 'Inicio', icon: LayoutDashboard },
     { href: '/admin-traumatologia/agenda', label: 'Agenda', icon: Calendar },
     { href: '/admin-traumatologia/pacientes', label: 'Pacientes', icon: Users },
   ]

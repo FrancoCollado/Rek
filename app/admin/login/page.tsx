@@ -21,9 +21,8 @@ export default function LoginPage() {
     setIsLoading(true)
 
     const credentials = [
-      { username: 'admin', password: 'rek2025', role: 'admin' as const, redirect: '/admin' },
-      { username: 'traumatologia', password: 'trauma2026', role: 'traumatologia' as const, redirect: '/admin-traumatologia' },
-      { username: 'traumatologa', password: 'trauma2026', role: 'traumatologia' as const, redirect: '/admin-traumatologia' },
+      { username: 'rekkines', password: 'krek2026', role: 'admin' as const, redirect: '/admin' },
+      { username: 'rektraumato', password: 'trek2026', role: 'traumatologia' as const, redirect: '/admin-traumatologia' },
     ]
 
     setTimeout(() => {
@@ -70,7 +69,7 @@ export default function LoginPage() {
             <label className="text-sm font-medium">Usuario</label>
             <Input
               type="text"
-              placeholder="admin"
+              placeholder=""
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               disabled={isLoading}
