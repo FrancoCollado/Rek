@@ -97,10 +97,6 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <p className="text-xs text-muted-foreground text-center mt-6">
-          Demo admin: <strong>admin</strong> / <strong>rek2025</strong><br />
-          Demo trauma: <strong>traumatologia</strong> o <strong>traumatologa</strong> / <strong>trauma2026</strong>
-        </p>
       </Card>
     </div>
   )
