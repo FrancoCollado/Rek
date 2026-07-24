@@ -25,6 +25,8 @@ const TIME_SLOTS = Array.from({ length: 13 }, (_, h) => h + 8).flatMap((h) => {
 
 function getSlotCapacity(time: string): number {
   const [h, m] = time.split(':').map((value) => parseInt(value, 10))
+  // El local abre a las 08:00: no hay cupos antes.
+  if (h < 8) return 0
   // Franja 12:00-15:59: solo dos turnos por hora (:00 y :30), un cupo cada uno.
   if (h >= 12 && h < 16) {
     if (m === 0 || m === 30) return 1
@@ -326,7 +328,10 @@ export default function AgendaWeekly({
   const visibleTimeSlots = useMemo(() => {
     const set = new Set<string>(baseTimeSlots || TIME_SLOTS)
     appointments.forEach((appt) => set.add(appt.time))
-    return Array.from(set).sort((left, right) => left.localeCompare(right))
+    // El local abre a las 08:00: nunca mostrar horarios anteriores.
+    return Array.from(set)
+      .filter((time) => time >= '08:00')
+      .sort((left, right) => left.localeCompare(right))
   }, [appointments, baseTimeSlots])
 
   useEffect(() => {
