@@ -15,15 +15,21 @@ import { ChevronLeft, ChevronRight, Check, FileText, Palette, Plus, XCircle } fr
 import { createClient } from '@/lib/supabase/client'
 import TurnoCompletionModal from '@/components/admin/turno-completion-modal'
 
-// Bloques válidos: :00 (2 cupos), :15 (1 cupo), :30 (2 cupos). Sin :45.
-const TIME_SLOTS = Array.from({ length: 14 }, (_, h) => h + 7).flatMap((h) =>
-  h < 20
-    ? [0, 15, 30].map((m) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
-    : ['20:00']
-)
+// El local abre a las 08:00. Bloques válidos: :00 (2 cupos), :15 (1 cupo), :30 (2 cupos). Sin :45.
+// Franja 12:00-15:59: solo :00 y :30 (dos turnos por hora, un cupo cada uno).
+const TIME_SLOTS = Array.from({ length: 13 }, (_, h) => h + 8).flatMap((h) => {
+  if (h >= 20) return ['20:00']
+  const minutes = h >= 12 && h < 16 ? [0, 30] : [0, 15, 30]
+  return minutes.map((m) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+})
 
 function getSlotCapacity(time: string): number {
-  const m = parseInt(time.split(':')[1], 10)
+  const [h, m] = time.split(':').map((value) => parseInt(value, 10))
+  // Franja 12:00-15:59: solo dos turnos por hora (:00 y :30), un cupo cada uno.
+  if (h >= 12 && h < 16) {
+    if (m === 0 || m === 30) return 1
+    return 0
+  }
   if (m === 0) return 2
   if (m === 15) return 1
   if (m === 30) return 2

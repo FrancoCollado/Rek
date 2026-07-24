@@ -208,6 +208,25 @@ export default function TurnoCompletionModal({
           onConflict: 'paciente_id,entidad_id'
         })
 
+      // Registrar el importe cobrado como ingreso en caja.
+      if (usarImporte && descuentoCuentaCorriente > 0) {
+        const { error: cajaError } = await supabase
+          .from('movimientos_caja')
+          .insert({
+            tipo: 'ingreso',
+            categoria: 'Kinesiología',
+            monto: descuentoCuentaCorriente,
+            descripcion: `Pago turno ${turno.patient || ''} ${turno.date || ''} ${turno.time || ''}`.trim(),
+            turno_id: turno.id,
+            paciente_id: turno.paciente_id,
+            fecha: turno.date || new Date().toISOString().split('T')[0],
+          })
+
+        if (cajaError) {
+          console.error('[v0] Error registrando ingreso en caja:', cajaError)
+        }
+      }
+
       onOpenChange(false)
       onComplete()
     } catch (error) {

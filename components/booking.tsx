@@ -169,7 +169,22 @@ function getProfessionalName(row: AvailabilityRow) {
 
 function getSlotCapacityByTime(slotTime: string) {
   const minutes = timeToMinutes(slotTime)
+  // El local abre a las 08:00, no se permiten turnos antes.
+  if (minutes < 8 * 60) {
+    return 0
+  }
+
+  const hourOfDay = Math.floor(minutes / 60)
   const minuteOfHour = minutes % 60
+
+  // Franja 12:00-15:59: solo dos turnos por hora (:00 y :30), un cupo cada uno.
+  if (hourOfDay >= 12 && hourOfDay < 16) {
+    if (minuteOfHour === 0 || minuteOfHour === 30) {
+      return 1
+    }
+    return 0
+  }
+
   if (minuteOfHour === 0) {
     return 2
   }
