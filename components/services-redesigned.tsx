@@ -3,7 +3,7 @@ import { Activity, Hand, Zap } from "lucide-react"
 const servicios = [
   {
     title: "Kinesiología",
-    description: "Tratamientos orientados a la rehabilitación incluyendo terapia manual, RPG y terapia vestibular.",
+    description: "Tratamientos orientados a la rehabilitación incluyendo terapia manual, RPG y rehabilitación vestibular.",
     icon: Hand
   },
   {
@@ -49,7 +49,7 @@ export function ServicesSection() {
           <ul className="grid md:grid-cols-2 gap-3">
             <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> Terapia Manual ONM</li>
             <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> RPG (Reeducación Postural Global)</li>
-            <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> Terapia Vestibular</li>
+            <li className="flex gap-2 text-foreground"><span className="text-primary font-bold">•</span> Rehabilitación Vestibular</li>
           </ul>
         </div>
       </div>

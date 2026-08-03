@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { ChevronLeft, ChevronRight, Check, FileText, Palette, Plus, XCircle } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check, FileText, Lock, Palette, Plus, XCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import TurnoCompletionModal from '@/components/admin/turno-completion-modal'
 
@@ -199,6 +199,16 @@ interface TreatmentOption {
   sesiones_realizadas: number
 }
 
+interface AgendaBlock {
+  id: string
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  motivo: string | null
+}
+
+type FeriadoItem = { dia: number; mes: number; motivo: string; tipo: string }
+
 interface CreateSlotContext {
   dayIndex: number
   time: string
@@ -210,6 +220,21 @@ type ManualTurnoForm = {
   tratamiento_id: string
   numero_sesion: string
   monto_pagado: string
+  notas: string
+}
+
+type NewPatientInlineForm = {
+  nombre: string
+  apellido: string
+  telefono: string
+  obra_social: string
+  dni: string
+}
+
+type NewTreatmentInlineForm = {
+  tipo_plan: 'orden' | 'libre'
+  sesiones_totales: string
+  precio_total: string
   notas: string
 }
 
@@ -319,7 +344,34 @@ export default function AgendaWeekly({
   const [createError, setCreateError] = useState<string | null>(null)
   const [patientOptions, setPatientOptions] = useState<PatientOption[]>([])
   const [treatmentOptions, setTreatmentOptions] = useState<TreatmentOption[]>([])
+  const [scheduledCountByTreatment, setScheduledCountByTreatment] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
+  // Bloqueos de agenda
+  const [blocks, setBlocks] = useState<AgendaBlock[]>([])
+  const [showBlockModal, setShowBlockModal] = useState(false)
+  const [blockDay, setBlockDay] = useState<{ dayIndex: number; date: string } | null>(null)
+  const [blockHoraInicio, setBlockHoraInicio] = useState('16:00')
+  const [blockHoraFin, setBlockHoraFin] = useState('20:00')
+  const [blockMotivo, setBlockMotivo] = useState('')
+  const [blockSaving, setBlockSaving] = useState(false)
+  const [blockError, setBlockError] = useState<string | null>(null)
+  // Feriados
+  const [showFeriadosModal, setShowFeriadosModal] = useState(false)
+  const [feriadosList, setFeriadosList] = useState<FeriadoItem[]>([])
+  const [selectedFeriados, setSelectedFeriados] = useState<Set<string>>(new Set())
+  const [feriadosLoading, setFeriadosLoading] = useState(false)
+  const [feriadosError, setFeriadosError] = useState<string | null>(null)
+  const [feriadosSaving, setFeriadosSaving] = useState(false)
+  // Inline new-patient form inside create modal
+  const [showNewPatientForm, setShowNewPatientForm] = useState(false)
+  const [newPatientForm, setNewPatientForm] = useState<NewPatientInlineForm>({ nombre: '', apellido: '', telefono: '', obra_social: '', dni: '' })
+  const [newPatientSaving, setNewPatientSaving] = useState(false)
+  const [newPatientError, setNewPatientError] = useState<string | null>(null)
+  // Inline new-treatment form inside create modal
+  const [showNewTreatmentForm, setShowNewTreatmentForm] = useState(false)
+  const [newTreatmentForm, setNewTreatmentForm] = useState<NewTreatmentInlineForm>({ tipo_plan: 'orden', sesiones_totales: '10', precio_total: '60000', notas: '' })
+  const [newTreatmentSaving, setNewTreatmentSaving] = useState(false)
+  const [newTreatmentError, setNewTreatmentError] = useState<string | null>(null)
 
   const cancelMessagePreview = selectedCancelTurno
     ? buildDefaultCancellationMessage(selectedCancelTurno)
@@ -344,6 +396,7 @@ export default function AgendaWeekly({
 
     // Cargar turnos de Supabase
     fetchAppointments(monday)
+    fetchBlocks(monday)
     fetchSpecialties()
     fetchCreateFormOptions()
   }, [])
@@ -351,21 +404,14 @@ export default function AgendaWeekly({
   const fetchCreateFormOptions = async () => {
     try {
       const supabase = createClient()
-      const { data: patientsData, error: patientsError } = await supabase
-        .from('pacientes')
-        .select('id, nombre, apellido, dni')
-        .eq('entidad_id', currentEntity)
-        .order('apellido')
-        .order('nombre')
+      const [{ data: patientsData, error: patientsError }, { data: treatmentsData, error: treatmentsError }, { data: scheduledData }] = await Promise.all([
+        supabase.from('pacientes').select('id, nombre, apellido, dni').eq('entidad_id', currentEntity).order('apellido').order('nombre'),
+        supabase.from('tratamientos').select('id, paciente_id, servicio, estado, sesiones_totales, sesiones_realizadas').eq('entidad_id', currentEntity).order('created_at', { ascending: false }),
+        supabase.from('turnos').select('tratamiento_id').eq('entidad_id', currentEntity).neq('estado', 'cancelado').not('tratamiento_id', 'is', null),
+      ])
 
       if (patientsError) throw patientsError
       setPatientOptions((patientsData || []) as PatientOption[])
-
-      const { data: treatmentsData, error: treatmentsError } = await supabase
-        .from('tratamientos')
-        .select('id, paciente_id, servicio, estado, sesiones_totales, sesiones_realizadas')
-        .eq('entidad_id', currentEntity)
-        .order('created_at', { ascending: false })
 
       if (treatmentsError) {
         console.error('[v0] Error loading treatments for manual turnos:', treatmentsError)
@@ -373,6 +419,14 @@ export default function AgendaWeekly({
       } else {
         setTreatmentOptions((treatmentsData || []) as TreatmentOption[])
       }
+
+      const countMap: Record<string, number> = {}
+      for (const row of scheduledData || []) {
+        if (row.tratamiento_id) {
+          countMap[row.tratamiento_id] = (countMap[row.tratamiento_id] || 0) + 1
+        }
+      }
+      setScheduledCountByTreatment(countMap)
     } catch (error) {
       console.error('[v0] Error loading options for manual turnos:', error)
       setPatientOptions([])
@@ -517,6 +571,7 @@ export default function AgendaWeekly({
       newDate.setDate(newDate.getDate() - 7)
       setCurrentDate(newDate)
       fetchAppointments(newDate)
+      fetchBlocks(newDate)
     }
   }
 
@@ -526,6 +581,124 @@ export default function AgendaWeekly({
       newDate.setDate(newDate.getDate() + 7)
       setCurrentDate(newDate)
       fetchAppointments(newDate)
+      fetchBlocks(newDate)
+    }
+  }
+
+  const fetchBlocks = async (startDate: Date) => {
+    try {
+      const supabase = createClient()
+      const startStr = formatDateForDb(startDate)
+      const endDate = new Date(startDate)
+      endDate.setDate(endDate.getDate() + 6)
+      const endStr = formatDateForDb(endDate)
+      const { data } = await supabase
+        .from('bloqueos_agenda')
+        .select('id, fecha, hora_inicio, hora_fin, motivo')
+        .eq('entidad_id', currentEntity)
+        .gte('fecha', startStr)
+        .lte('fecha', endStr)
+      setBlocks((data || []) as AgendaBlock[])
+    } catch {
+      // silently ignore
+    }
+  }
+
+  const isSlotBlocked = (date: string, time: string): AgendaBlock | undefined =>
+    blocks.find((b) => {
+      if (b.fecha !== date) return false
+      const start = b.hora_inicio.slice(0, 5)
+      const end = b.hora_fin.slice(0, 5)
+      return time >= start && time < end
+    })
+
+  const handleOpenBlockModal = (dayIndex: number) => {
+    setBlockDay({ dayIndex, date: formatDateForDb(weekDays[dayIndex]) })
+    setBlockHoraInicio('16:00')
+    setBlockHoraFin('20:00')
+    setBlockMotivo('')
+    setBlockError(null)
+    setShowBlockModal(true)
+  }
+
+  const handleCreateBlock = async () => {
+    if (!blockDay) return
+    if (blockHoraInicio >= blockHoraFin) {
+      setBlockError('La hora de inicio debe ser anterior a la hora de fin.')
+      return
+    }
+    try {
+      setBlockSaving(true)
+      setBlockError(null)
+      const supabase = createClient()
+      const { error } = await supabase.from('bloqueos_agenda').insert({
+        entidad_id: currentEntity,
+        fecha: blockDay.date,
+        hora_inicio: `${blockHoraInicio}:00`,
+        hora_fin: `${blockHoraFin}:00`,
+        motivo: blockMotivo.trim() || null,
+      })
+      if (error) throw error
+      setShowBlockModal(false)
+      await fetchBlocks(currentDate || new Date())
+    } catch (err: any) {
+      setBlockError(err?.message || 'No se pudo crear el bloqueo.')
+    } finally {
+      setBlockSaving(false)
+    }
+  }
+
+  const handleDeleteBlock = async (blockId: string) => {
+    try {
+      const supabase = createClient()
+      await supabase.from('bloqueos_agenda').delete().eq('id', blockId)
+      setBlocks((current) => current.filter((b) => b.id !== blockId))
+    } catch {
+      // silently ignore
+    }
+  }
+
+  const handleFetchFeriados = async () => {
+    const year = (currentDate || new Date()).getFullYear()
+    try {
+      setFeriadosLoading(true)
+      setFeriadosError(null)
+      const res = await fetch(`https://nolaborables.com.ar/api/v2/feriados/${year}`)
+      if (!res.ok) throw new Error('No se pudo obtener el listado de feriados.')
+      const data: FeriadoItem[] = await res.json()
+      setFeriadosList(data)
+      setSelectedFeriados(new Set(data.map((f) => `${f.mes}-${f.dia}`)))
+    } catch (err: any) {
+      setFeriadosError(err?.message || 'Error al obtener feriados.')
+    } finally {
+      setFeriadosLoading(false)
+    }
+  }
+
+  const handleImportFeriados = async () => {
+    const year = (currentDate || new Date()).getFullYear()
+    const toImport = feriadosList.filter((f) => selectedFeriados.has(`${f.mes}-${f.dia}`))
+    if (toImport.length === 0) return
+    try {
+      setFeriadosSaving(true)
+      setFeriadosError(null)
+      const supabase = createClient()
+      for (const f of toImport) {
+        const fecha = `${year}-${String(f.mes).padStart(2, '0')}-${String(f.dia).padStart(2, '0')}`
+        await supabase.from('bloqueos_agenda').insert({
+          entidad_id: currentEntity,
+          fecha,
+          hora_inicio: '08:00:00',
+          hora_fin: '20:00:00',
+          motivo: f.motivo || 'Feriado nacional',
+        })
+      }
+      setShowFeriadosModal(false)
+      await fetchBlocks(currentDate || new Date())
+    } catch (err: any) {
+      setFeriadosError(err?.message || 'No se pudieron importar los feriados.')
+    } finally {
+      setFeriadosSaving(false)
     }
   }
 
@@ -728,15 +901,97 @@ export default function AgendaWeekly({
 
   const handleOpenCreateModal = (dayIndex: number, time: string) => {
     const slotDate = weekDays[dayIndex]
-    setCreateSlot({
-      dayIndex,
-      time,
-      date: formatDateForDb(slotDate),
-    })
+    setCreateSlot({ dayIndex, time, date: formatDateForDb(slotDate) })
     setManualTurnoForm(defaultManualTurnoForm)
     setPatientSearch('')
     setCreateError(null)
+    setShowNewPatientForm(false)
+    setNewPatientForm({ nombre: '', apellido: '', telefono: '', obra_social: '', dni: '' })
+    setNewPatientError(null)
+    setShowNewTreatmentForm(false)
+    setNewTreatmentForm({ tipo_plan: 'orden', sesiones_totales: '10', precio_total: '60000', notas: '' })
+    setNewTreatmentError(null)
     setShowCreateModal(true)
+  }
+
+  const handleCreateInlinePatient = async () => {
+    if (!newPatientForm.nombre.trim() || !newPatientForm.apellido.trim()) {
+      setNewPatientError('Nombre y apellido son obligatorios.')
+      return
+    }
+    try {
+      setNewPatientSaving(true)
+      setNewPatientError(null)
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from('pacientes')
+        .insert({
+          entidad_id: currentEntity,
+          nombre: newPatientForm.nombre.trim(),
+          apellido: newPatientForm.apellido.trim(),
+          telefono: newPatientForm.telefono.trim() || null,
+          obra_social: newPatientForm.obra_social.trim() || null,
+          dni: newPatientForm.dni.trim() || null,
+          email: null,
+        })
+        .select('id, nombre, apellido, dni')
+        .single()
+      if (error) throw error
+      const newPatient = data as PatientOption
+      setPatientOptions((current) => [newPatient, ...current])
+      setManualTurnoForm((current) => ({ ...current, paciente_id: newPatient.id, tratamiento_id: '' }))
+      setPatientSearch(formatPatientOptionLabel(newPatient))
+      setShowNewPatientForm(false)
+      setNewPatientForm({ nombre: '', apellido: '', telefono: '', obra_social: '', dni: '' })
+    } catch (err: any) {
+      setNewPatientError(err?.message || 'No se pudo crear el paciente.')
+    } finally {
+      setNewPatientSaving(false)
+    }
+  }
+
+  const handleCreateInlineTreatment = async () => {
+    if (!manualTurnoForm.paciente_id) {
+      setNewTreatmentError('Primero seleccioná un paciente.')
+      return
+    }
+    try {
+      setNewTreatmentSaving(true)
+      setNewTreatmentError(null)
+      const supabase = createClient()
+      const totalSessions = Math.max(1, Number(newTreatmentForm.sesiones_totales || '1'))
+      const totalPrice = Math.max(0, Number(newTreatmentForm.precio_total || '0'))
+      const { data, error } = await supabase
+        .from('tratamientos')
+        .insert({
+          entidad_id: currentEntity,
+          paciente_id: manualTurnoForm.paciente_id,
+          servicio: currentEntity,
+          tipo_plan: newTreatmentForm.tipo_plan,
+          sesiones_totales: totalSessions,
+          sesiones_realizadas: 0,
+          precio_total: totalPrice,
+          monto_pagado: 0,
+          notas: newTreatmentForm.notas.trim() || null,
+          estado: 'activo',
+        })
+        .select('id, paciente_id, servicio, estado, sesiones_totales, sesiones_realizadas')
+        .single()
+      if (error) throw error
+      const newTreatment = data as TreatmentOption
+      setTreatmentOptions((current) => [newTreatment, ...current])
+      setManualTurnoForm((current) => ({
+        ...current,
+        tratamiento_id: newTreatment.id,
+        numero_sesion: '1',
+      }))
+      setShowNewTreatmentForm(false)
+      setNewTreatmentForm({ tipo_plan: 'orden', sesiones_totales: '10', precio_total: '60000', notas: '' })
+    } catch (err: any) {
+      setNewTreatmentError(err?.message || 'No se pudo crear el tratamiento.')
+    } finally {
+      setNewTreatmentSaving(false)
+    }
   }
 
   const handleCreateTurno = async () => {
@@ -745,6 +1000,18 @@ export default function AgendaWeekly({
     if (!manualTurnoForm.paciente_id) {
       setCreateError('Seleccioná un paciente para crear el turno.')
       return
+    }
+
+    // Bloquear si el tratamiento ya tiene todas sus sesiones agendadas.
+    if (manualTurnoForm.tratamiento_id) {
+      const treatment = availableTreatmentsForPatient.find((t) => t.id === manualTurnoForm.tratamiento_id)
+      if (treatment) {
+        const scheduled = scheduledCountByTreatment[treatment.id] || 0
+        if (scheduled >= treatment.sesiones_totales) {
+          setCreateError(`Este tratamiento ya tiene todas sus ${treatment.sesiones_totales} sesiones agendadas. No se pueden agregar más.`)
+          return
+        }
+      }
     }
 
     try {
@@ -814,6 +1081,16 @@ export default function AgendaWeekly({
           <Button variant="outline" size="icon" onClick={handleNextWeek}>
             <ChevronRight className="w-4 h-4" />
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1 text-xs"
+            onClick={() => { setShowFeriadosModal(true); handleFetchFeriados() }}
+            title="Importar feriados nacionales"
+          >
+            <Lock className="w-3 h-3" />
+            Feriados
+          </Button>
         </div>
       </div>
 
@@ -825,7 +1102,17 @@ export default function AgendaWeekly({
               <th className="w-16 p-2 text-left text-xs font-medium border border-border bg-secondary">Hora</th>
               {DAYS.map((day, i) => (
                 <th key={day} className="min-w-40 p-2 text-center text-xs font-medium border border-border bg-secondary">
-                  <div>{day}</div>
+                  <div className="flex items-center justify-center gap-1">
+                    <span>{day}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenBlockModal(i)}
+                      className="text-muted-foreground hover:text-foreground"
+                      title="Bloquear rango de horarios"
+                    >
+                      <Lock className="w-3 h-3" />
+                    </button>
+                  </div>
                   <div className="text-[11px] text-muted-foreground">{weekDays[i].toLocaleDateString('es-AR', { day: 'numeric', month: 'numeric' })}</div>
                 </th>
               ))}
@@ -846,10 +1133,17 @@ export default function AgendaWeekly({
                 </td>
                 {DAYS.map((_, dayIndex) => {
                   const slotsAppts = getAppointmentsForSlot(dayIndex, time)
+                  const dateStr = formatDateForDb(weekDays[dayIndex])
+                  const block = isSlotBlocked(dateStr, time)
                   return (
                     <td key={`${dayIndex}-${time}`} className="p-1 border border-border min-h-14 align-top">
                       <div className="space-y-0.5">
-                        {slotsAppts.length < getSlotCapacity(time) && (!canCreateSlot || canCreateSlot(dayIndex, time)) ? (
+                        {block ? (
+                          <div className="flex items-center justify-between px-1 py-0.5 rounded text-[10px] bg-destructive/10 border border-destructive/20 text-muted-foreground">
+                            <span className="truncate">🔒 {block.motivo || 'Bloqueado'}</span>
+                            <button type="button" onClick={() => handleDeleteBlock(block.id)} className="text-destructive ml-1 hover:opacity-70 shrink-0" title="Desbloquear">×</button>
+                          </div>
+                        ) : slotsAppts.length < getSlotCapacity(time) && (!canCreateSlot || canCreateSlot(dayIndex, time)) ? (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -860,7 +1154,7 @@ export default function AgendaWeekly({
                             <Plus className="w-3 h-3 mr-1" />
                             {slotsAppts.length === 0 ? 'Crear' : `Agregar (${slotsAppts.length}/${getSlotCapacity(time)})`}
                           </Button>
-                        ) : null}
+                          ) : null}
                         {slotsAppts.map((appt) => {
                           const isCompleted = appt.estado === 'realizado' || appt.estado === 'completado'
                           const unattendedButCharged = appt.asistido === false && appt.cobrado === true
@@ -1106,64 +1400,158 @@ export default function AgendaWeekly({
 
           <div className="grid md:grid-cols-2 gap-3">
             <div className="md:col-span-2">
-              <label className="text-sm font-medium">Buscar paciente</label>
-              <input
-                type="text"
-                value={patientSearch}
-                onChange={(e) => {
-                  setPatientSearch(e.target.value)
-                  setManualTurnoForm((current) => ({ ...current, paciente_id: '', tratamiento_id: '' }))
-                }}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                placeholder="Escribí nombre, apellido o DNI"
-              />
-              <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-border bg-background">
-                {filteredPatientOptions.map((patient) => (
-                  <button
-                    key={patient.id}
-                    type="button"
-                    onClick={() => {
-                      setManualTurnoForm((current) => ({ ...current, paciente_id: patient.id, tratamiento_id: '' }))
-                      setPatientSearch(formatPatientOptionLabel(patient))
-                    }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary ${manualTurnoForm.paciente_id === patient.id ? 'bg-secondary' : ''}`}
-                  >
-                    {formatPatientOptionLabel(patient)}
-                  </button>
-                ))}
-                {filteredPatientOptions.length === 0 ? (
-                  <p className="px-3 py-2 text-xs text-muted-foreground">No se encontraron pacientes con ese criterio.</p>
-                ) : null}
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm font-medium">Buscar paciente</label>
+                <button
+                  type="button"
+                  onClick={() => { setShowNewPatientForm((v) => !v); setNewPatientError(null) }}
+                  className="text-xs text-primary hover:underline"
+                >
+                  {showNewPatientForm ? '← Volver a búsqueda' : '+ Nuevo paciente'}
+                </button>
               </div>
-              {manualTurnoForm.paciente_id ? (
-                <p className="text-xs text-primary mt-1">Paciente seleccionado correctamente.</p>
-              ) : null}
+
+              {showNewPatientForm ? (
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs font-medium">Nombre *</label>
+                      <input value={newPatientForm.nombre} onChange={(e) => setNewPatientForm((f) => ({ ...f, nombre: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">Apellido *</label>
+                      <input value={newPatientForm.apellido} onChange={(e) => setNewPatientForm((f) => ({ ...f, apellido: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">Teléfono</label>
+                      <input value={newPatientForm.telefono} onChange={(e) => setNewPatientForm((f) => ({ ...f, telefono: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">Obra social</label>
+                      <input value={newPatientForm.obra_social} onChange={(e) => setNewPatientForm((f) => ({ ...f, obra_social: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">DNI (opcional)</label>
+                      <input value={newPatientForm.dni} onChange={(e) => setNewPatientForm((f) => ({ ...f, dni: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                  </div>
+                  {newPatientError && <p className="text-xs text-destructive">{newPatientError}</p>}
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setShowNewPatientForm(false)} className="text-xs text-muted-foreground hover:underline">Cancelar</button>
+                    <Button size="sm" onClick={handleCreateInlinePatient} disabled={newPatientSaving}>
+                      {newPatientSaving ? 'Creando...' : 'Crear paciente'}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={patientSearch}
+                    onChange={(e) => {
+                      setPatientSearch(e.target.value)
+                      setManualTurnoForm((current) => ({ ...current, paciente_id: '', tratamiento_id: '' }))
+                    }}
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    placeholder="Escribí nombre, apellido o DNI"
+                  />
+                  <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-border bg-background">
+                    {filteredPatientOptions.map((patient) => (
+                      <button
+                        key={patient.id}
+                        type="button"
+                        onClick={() => {
+                          setManualTurnoForm((current) => ({ ...current, paciente_id: patient.id, tratamiento_id: '' }))
+                          setPatientSearch(formatPatientOptionLabel(patient))
+                        }}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary ${manualTurnoForm.paciente_id === patient.id ? 'bg-secondary' : ''}`}
+                      >
+                        {formatPatientOptionLabel(patient)}
+                      </button>
+                    ))}
+                    {filteredPatientOptions.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">No se encontraron pacientes con ese criterio.</p>
+                    ) : null}
+                  </div>
+                  {manualTurnoForm.paciente_id ? (
+                    <p className="text-xs text-primary mt-1">Paciente seleccionado correctamente.</p>
+                  ) : null}
+                </>
+              )}
             </div>
 
             <div>
-              <label className="text-sm font-medium">Tratamiento (tratamiento_id)</label>
-              <select
-                value={manualTurnoForm.tratamiento_id}
-                onChange={(e) => {
-                  const selectedTreatmentId = e.target.value
-                  const selectedTreatment = availableTreatmentsForPatient.find((item) => item.id === selectedTreatmentId)
-                  setManualTurnoForm((current) => ({
-                    ...current,
-                    tratamiento_id: selectedTreatmentId,
-                    numero_sesion: selectedTreatment
-                      ? String(Math.min(selectedTreatment.sesiones_totales, selectedTreatment.sesiones_realizadas + 1))
-                      : current.numero_sesion,
-                  }))
-                }}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              >
-                <option value="">Sin tratamiento</option>
-                {availableTreatmentsForPatient.map((treatment) => (
-                  <option key={treatment.id} value={treatment.id}>
-                    {`${serviceLabels[treatment.servicio] || treatment.servicio} - ${treatment.estado} (${treatment.sesiones_realizadas}/${treatment.sesiones_totales})`}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm font-medium">Tratamiento</label>
+                {manualTurnoForm.paciente_id && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowNewTreatmentForm((v) => !v); setNewTreatmentError(null) }}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    {showNewTreatmentForm ? '← Volver' : '+ Nuevo tratamiento'}
+                  </button>
+                )}
+              </div>
+              {showNewTreatmentForm ? (
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs font-medium">Tipo</label>
+                      <select value={newTreatmentForm.tipo_plan} onChange={(e) => setNewTreatmentForm((f) => ({ ...f, tipo_plan: e.target.value as 'orden' | 'libre' }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm">
+                        <option value="orden">Orden médica</option>
+                        <option value="libre">Sesión libre</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">Sesiones totales</label>
+                      <input type="number" min="1" value={newTreatmentForm.sesiones_totales} onChange={(e) => setNewTreatmentForm((f) => ({ ...f, sesiones_totales: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium">Precio total</label>
+                      <input type="number" min="0" value={newTreatmentForm.precio_total} onChange={(e) => setNewTreatmentForm((f) => ({ ...f, precio_total: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm" />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-medium">Notas</label>
+                      <textarea value={newTreatmentForm.notas} onChange={(e) => setNewTreatmentForm((f) => ({ ...f, notas: e.target.value }))} className="w-full rounded border border-border bg-background px-2 py-1 text-sm min-h-16" />
+                    </div>
+                  </div>
+                  {newTreatmentError && <p className="text-xs text-destructive">{newTreatmentError}</p>}
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setShowNewTreatmentForm(false)} className="text-xs text-muted-foreground hover:underline">Cancelar</button>
+                    <Button size="sm" onClick={handleCreateInlineTreatment} disabled={newTreatmentSaving}>
+                      {newTreatmentSaving ? 'Creando...' : 'Crear tratamiento'}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <select
+                  value={manualTurnoForm.tratamiento_id}
+                  onChange={(e) => {
+                    const selectedTreatmentId = e.target.value
+                    const selectedTreatment = availableTreatmentsForPatient.find((item) => item.id === selectedTreatmentId)
+                    setManualTurnoForm((current) => ({
+                      ...current,
+                      tratamiento_id: selectedTreatmentId,
+                      numero_sesion: selectedTreatment
+                        ? String(Math.min(selectedTreatment.sesiones_totales, (scheduledCountByTreatment[selectedTreatment.id] || 0) + 1))
+                        : current.numero_sesion,
+                    }))
+                  }}
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">Sin tratamiento</option>
+                  {availableTreatmentsForPatient.map((treatment) => {
+                  const scheduled = scheduledCountByTreatment[treatment.id] || 0
+                  const isFull = scheduled >= treatment.sesiones_totales
+                  return (
+                    <option key={treatment.id} value={treatment.id} disabled={isFull}>
+                      {`${serviceLabels[treatment.servicio] || treatment.servicio} - ${treatment.estado} (${scheduled}/${treatment.sesiones_totales})${isFull ? ' — COMPLETO' : ''}`}
+                    </option>
+                  )
+                })}
+                </select>
+              )}
             </div>
 
             <div>
@@ -1205,6 +1593,119 @@ export default function AgendaWeekly({
               {createSaving ? 'Guardando...' : 'Guardar turno'}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal bloqueo de horario */}
+      <Dialog open={showBlockModal} onOpenChange={setShowBlockModal}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Bloquear horarios</DialogTitle>
+            <DialogDescription>
+              {blockDay
+                ? `${DAYS[blockDay.dayIndex]} ${blockDay.date}`
+                : 'Seleccioná el rango a bloquear'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium">Desde</label>
+                <input
+                  type="time"
+                  value={blockHoraInicio}
+                  onChange={(e) => setBlockHoraInicio(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Hasta</label>
+                <input
+                  type="time"
+                  value={blockHoraFin}
+                  onChange={(e) => setBlockHoraFin(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Motivo (opcional)</label>
+              <input
+                type="text"
+                value={blockMotivo}
+                onChange={(e) => setBlockMotivo(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                placeholder="Ej: Feriado, Reunión, Mantenimiento"
+              />
+            </div>
+            {blockError && <p className="text-sm text-destructive">{blockError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowBlockModal(false)}>Cancelar</Button>
+              <Button onClick={handleCreateBlock} disabled={blockSaving}>
+                {blockSaving ? 'Bloqueando...' : 'Bloquear'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal feriados */}
+      <Dialog open={showFeriadosModal} onOpenChange={setShowFeriadosModal}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Importar feriados nacionales</DialogTitle>
+            <DialogDescription>
+              Seleccioná los feriados que querés bloquear en la agenda (día completo: 08:00–20:00)
+            </DialogDescription>
+          </DialogHeader>
+          {feriadosLoading ? (
+            <p className="text-sm text-muted-foreground">Cargando feriados...</p>
+          ) : feriadosError ? (
+            <p className="text-sm text-destructive">{feriadosError}</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex gap-2 text-xs">
+                <button type="button" className="text-primary hover:underline" onClick={() => setSelectedFeriados(new Set(feriadosList.map((f) => `${f.mes}-${f.dia}`)))}>
+                  Todos
+                </button>
+                <span className="text-muted-foreground">·</span>
+                <button type="button" className="text-primary hover:underline" onClick={() => setSelectedFeriados(new Set())}>
+                  Ninguno
+                </button>
+              </div>
+              <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                {feriadosList.map((f) => {
+                  const key = `${f.mes}-${f.dia}`
+                  const label = `${String(f.dia).padStart(2, '0')}/${String(f.mes).padStart(2, '0')} — ${f.motivo}`
+                  return (
+                    <label key={key} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-secondary/50 rounded px-1 py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={selectedFeriados.has(key)}
+                        onChange={(e) => {
+                          setSelectedFeriados((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(key)
+                            else next.delete(key)
+                            return next
+                          })
+                        }}
+                      />
+                      <span>{label}</span>
+                      <span className="text-xs text-muted-foreground ml-auto">{f.tipo}</span>
+                    </label>
+                  )
+                })}
+              </div>
+              {feriadosError && <p className="text-sm text-destructive">{feriadosError}</p>}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowFeriadosModal(false)}>Cancelar</Button>
+                <Button onClick={handleImportFeriados} disabled={feriadosSaving || selectedFeriados.size === 0}>
+                  {feriadosSaving ? 'Importando...' : `Importar ${selectedFeriados.size} feriado${selectedFeriados.size !== 1 ? 's' : ''}`}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

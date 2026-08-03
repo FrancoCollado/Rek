@@ -7,11 +7,11 @@ const otherServices = [
   {
     title: "Pilates",
     description: "Clases grupales e individuales de pilates reformer y mat",
-    items: ["Pilates reformer", "Pilates mat", "Clases grupales", "Sesiones individuales"],
+    items: ["Pilates reformer", "Clases grupales", "Grupo reducido", "Pilates terapéutico"],
   },
   {
     title: "Gimnasio",
-    description: "Entrenamiento personalizado con equipos de última generación",
+    description: "Entrenamiento personalizado",
     items: ["Musculación", "Entrenamiento funcional", "Cardio", "Entrenamiento personalizado"],
   },
   {

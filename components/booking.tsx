@@ -69,13 +69,14 @@ type FormData = {
   phone: string
 }
 
-type InsurancePreset = 'iapos' | 'swiss_medical' | 'otra'
+type InsurancePreset = 'iapos' | 'osdop' | 'swiss_medical' | 'escencial' | 'osde' | 'galeno' | 'particular' | 'otra'
 
 type InsurancePolicy = {
   displayName: string
   perSessionAmount: number
   stampAmount: number
   requirements: string[]
+  discountInfo?: { sessions: number; percent: number }
 }
 
 function getInsurancePolicy(preset: InsurancePreset, customName?: string): InsurancePolicy {
@@ -85,9 +86,25 @@ function getInsurancePolicy(preset: InsurancePreset, customName?: string): Insur
       perSessionAmount: 6000,
       stampAmount: 5000,
       requirements: [
-        'Debe presentar 3 bonos por sesión.',
+        'Traer orden médica.',
+        'Bonos digitales: 3 por sesión (deben enviarse todos juntos, ej.: 5 sesiones = 15 bonos, 10 sesiones = 30 bonos).',
         'Estampillado único: $5.000.',
         'Plus por sesión: $6.000.',
+        'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
+      ],
+    }
+  }
+
+  if (preset === 'osdop') {
+    return {
+      displayName: 'OSDOP',
+      perSessionAmount: 6000,
+      stampAmount: 5000,
+      requirements: [
+        'Presentar una orden médica por todo el tratamiento.',
+        'Estampillado único: $5.000.',
+        'Plus por sesión: $6.000.',
+        'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
       ],
     }
   }
@@ -101,6 +118,60 @@ function getInsurancePolicy(preset: InsurancePreset, customName?: string): Insur
         'Debe presentar orden médica vigente.',
         'Estampillado único: $5.000.',
         'Plus por sesión: $4.000.',
+        'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
+      ],
+    }
+  }
+
+  if (preset === 'escencial') {
+    return {
+      displayName: 'ESCENCIAL',
+      perSessionAmount: 3000,
+      stampAmount: 0,
+      requirements: [
+        'Debe presentar orden médica vigente.',
+        'Plus por sesión: $3.000.',
+        'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
+      ],
+    }
+  }
+
+  if (preset === 'osde') {
+    return {
+      displayName: 'OSDE',
+      perSessionAmount: 3000,
+      stampAmount: 0,
+      requirements: [
+        'Debe presentar orden médica vigente.',
+        'Plus por sesión: $3.000.',
+        'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
+      ],
+    }
+  }
+
+  if (preset === 'galeno') {
+    return {
+      displayName: 'GALENO',
+      perSessionAmount: 3000,
+      stampAmount: 0,
+      requirements: [
+        'Debe presentar orden médica vigente.',
+        'Plus por sesión: $3.000.',
+        'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
+      ],
+    }
+  }
+
+  if (preset === 'particular') {
+    return {
+      displayName: 'Particular',
+      perSessionAmount: 20000,
+      stampAmount: 0,
+      discountInfo: { sessions: 5, percent: 10 },
+      requirements: [
+        'Sin obra social. Se abona al momento de la consulta.',
+        'Sesión individual: $20.000.',
+        'Pagando 5 sesiones juntas: 10% de descuento ($90.000 total).',
       ],
     }
   }
@@ -113,6 +184,7 @@ function getInsurancePolicy(preset: InsurancePreset, customName?: string): Insur
       'Debe presentar orden médica vigente.',
       'Estampillado único: $5.000.',
       'Plus por sesión: $3.000.',
+      'En caso de que tu plan tenga coseguro, te informaremos al momento de autorizar.',
     ],
   }
 }
@@ -174,6 +246,11 @@ function getSlotCapacityByTime(slotTime: string) {
     return 0
   }
 
+  // No hay turnos a partir de las 19:30.
+  if (minutes >= 19 * 60 + 30) {
+    return 0
+  }
+
   const hourOfDay = Math.floor(minutes / 60)
   const minuteOfHour = minutes % 60
 
@@ -190,7 +267,8 @@ function getSlotCapacityByTime(slotTime: string) {
   }
 
   if (minuteOfHour === 15) {
-    return 1
+    // 19:15 admite 2 turnos (último bloque del día).
+    return hourOfDay === 19 ? 2 : 1
   }
 
   if (minuteOfHour === 30) {
@@ -283,6 +361,7 @@ export function Booking() {
   const [availabilityError, setAvailabilityError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [dailyCapReached, setDailyCapReached] = useState(false)
   const submitLockRef = useRef(false)
 
   const today = new Date()
@@ -512,6 +591,47 @@ export function Booking() {
     }
   }, [selectedDate, selectedService, availabilityRows])
 
+  // Cupo diario máximo de 12 sesiones para OSDOP y ESCENCIAL.
+  const OSDOP_ESCENCIAL_DAILY_CAP = 12
+  useEffect(() => {
+    if (!selectedDate || !selectedService || (insurancePreset !== 'osdop' && insurancePreset !== 'escencial')) {
+      setDailyCapReached(false)
+      return
+    }
+
+    let isActive = true
+    const checkDailyCap = async () => {
+      try {
+        const supabase = createClient()
+        const { data: dayTurnos } = await supabase
+          .from('turnos')
+          .select('paciente_id')
+          .eq('fecha', formatLocalDate(selectedDate))
+          .eq('servicio', selectedService)
+          .neq('estado', 'cancelado')
+
+        const pacienteIds = (dayTurnos || []).map((t) => t.paciente_id).filter(Boolean)
+        if (pacienteIds.length === 0) {
+          if (isActive) setDailyCapReached(false)
+          return
+        }
+
+        const { data: capPacientes } = await supabase
+          .from('pacientes')
+          .select('id')
+          .in('id', pacienteIds)
+          .in('obra_social', ['OSDOP', 'ESCENCIAL'])
+
+        if (isActive) setDailyCapReached((capPacientes?.length || 0) >= OSDOP_ESCENCIAL_DAILY_CAP)
+      } catch {
+        if (isActive) setDailyCapReached(false)
+      }
+    }
+
+    checkDailyCap()
+    return () => { isActive = false }
+  }, [selectedDate, selectedService, insurancePreset])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmitError(null)
@@ -564,7 +684,7 @@ export function Booking() {
         ? Math.max(1, Number(treatmentSessions || '1'))
         : 1
 
-      if (!isTraumatologiaFlow && appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && !medicalOrderFile) {
+      if (!isTraumatologiaFlow && appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && insurancePreset !== 'particular' && !medicalOrderFile) {
         setSubmitError('Para iniciar tratamiento debés adjuntar la orden médica.')
         setStep(2)
         return
@@ -761,6 +881,51 @@ export function Booking() {
         ? selectedTreatmentSessions
         : [{ date: formatLocalDate(selectedDate as Date), time: selectedTime as string }]
 
+      // Validar que el paciente no tenga ya un turno en alguna de las fechas solicitadas.
+      const requestedDates = [...new Set(requestedSessions.map((s) => s.date))]
+      const { data: existingOnDates, error: existingOnDatesError } = await supabase
+        .from('turnos')
+        .select('fecha')
+        .eq('paciente_id', patientId)
+        .in('fecha', requestedDates)
+        .neq('estado', 'cancelado')
+
+      if (existingOnDatesError) {
+        throw new Error(`[Duplicado] ${existingOnDatesError.message || 'Error al verificar turnos existentes'}`)
+      }
+
+      if (existingOnDates && existingOnDates.length > 0) {
+        const conflictDate = existingOnDates[0].fecha
+        setSubmitError(`Ya tenés un turno registrado para el ${conflictDate}. Solo se permite un turno por día.`)
+        return
+      }
+
+      // Cupo diario OSDOP/ESCENCIAL.
+      if (insurancePreset === 'osdop' || insurancePreset === 'escencial') {
+        for (const session of requestedSessions) {
+          const { data: capTurnos } = await supabase
+            .from('turnos')
+            .select('paciente_id')
+            .eq('fecha', session.date)
+            .eq('servicio', selectedService)
+            .neq('estado', 'cancelado')
+
+          const capIds = (capTurnos || []).map((t) => t.paciente_id).filter(Boolean)
+          if (capIds.length > 0) {
+            const { data: capPacientes } = await supabase
+              .from('pacientes')
+              .select('id')
+              .in('id', capIds)
+              .in('obra_social', ['OSDOP', 'ESCENCIAL'])
+
+            if ((capPacientes?.length || 0) >= OSDOP_ESCENCIAL_DAILY_CAP) {
+              setSubmitError(`Se alcanzó el cupo máximo de ${OSDOP_ESCENCIAL_DAILY_CAP} sesiones OSDOP/ESCENCIAL para el ${session.date}. Elegí otro día.`)
+              return
+            }
+          }
+        }
+      }
+
       const assignments: Array<{ fecha: string; hora: string; usuarioId: string | null }> = []
 
       for (const requestedSession of requestedSessions) {
@@ -822,7 +987,14 @@ export function Booking() {
 
       if (appointmentMode === 'tratamiento' && !isTraumatologiaFlow) {
         let orderReference = medicalOrderFile?.name || 'orden_medica'
-        const treatmentPrice = sessionsRequested * insurancePolicy.perSessionAmount
+        const basePrice = sessionsRequested * insurancePolicy.perSessionAmount
+        const discountApplied =
+          insurancePolicy.discountInfo != null &&
+          sessionsRequested >= insurancePolicy.discountInfo.sessions
+        const discountAmount = discountApplied
+          ? Math.round(basePrice * (insurancePolicy.discountInfo!.percent / 100))
+          : 0
+        const treatmentPrice = basePrice - discountAmount
         const totalDebtWithStamp = treatmentPrice + insurancePolicy.stampAmount
 
         if (medicalOrderFile) {
@@ -839,9 +1011,13 @@ export function Booking() {
           }
         }
 
+        const stampNote = insurancePolicy.stampAmount > 0 ? ` | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único)` : ''
+        const discountNote = discountApplied ? ` | Descuento ${insurancePolicy.discountInfo!.percent}% por ${insurancePolicy.discountInfo!.sessions} sesiones` : ''
         const treatmentNotes = insurancePreset === 'iapos'
-          ? `Obra social: ${insuranceName.trim()} | Bonos: 3 por sesión | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único) | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
-          : `Obra social: ${insuranceName.trim()} | Orden: ${orderReference} | Estampillado: $${insurancePolicy.stampAmount.toLocaleString()} (único) | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
+          ? `Obra social: ${insuranceName.trim()} | Bonos: 3 por sesión${stampNote} | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
+          : insurancePreset === 'particular'
+          ? `Particular | $${insurancePolicy.perSessionAmount.toLocaleString()}/sesión${discountNote}`
+          : `Obra social: ${insuranceName.trim()} | Orden: ${orderReference}${stampNote} | Plus sesión: $${insurancePolicy.perSessionAmount.toLocaleString()}`
         const userTreatmentNote = treatmentNote.trim()
         const finalTreatmentNotes = userTreatmentNote
           ? `${treatmentNotes} | Nota paciente: ${userTreatmentNote}`
@@ -853,7 +1029,7 @@ export function Booking() {
             entidad_id: entidadId,
             paciente_id: patientId,
             servicio: selectedService,
-            tipo_plan: insurancePreset === 'iapos' ? 'libre' : 'orden',
+            tipo_plan: insurancePreset === 'iapos' || insurancePreset === 'particular' ? 'libre' : 'orden',
             sesiones_totales: sessionsRequested,
             sesiones_realizadas: 0,
             precio_total: totalDebtWithStamp,
@@ -1012,7 +1188,22 @@ export function Booking() {
                   <div className="mt-2 p-3 rounded-lg bg-primary/5 border border-primary/20">
                     <p className="text-sm font-medium">Deuda registrada en tu cuenta corriente</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {createdSessionsCount} sesión{createdSessionsCount !== 1 ? 'es' : ''} × ${getInsurancePolicy(insurancePreset, customInsuranceName).perSessionAmount.toLocaleString()} + estampillado ${getInsurancePolicy(insurancePreset, customInsuranceName).stampAmount.toLocaleString()} = <strong>${(createdSessionsCount * getInsurancePolicy(insurancePreset, customInsuranceName).perSessionAmount + getInsurancePolicy(insurancePreset, customInsuranceName).stampAmount).toLocaleString()}</strong>
+                      {(() => {
+                        const pol = getInsurancePolicy(insurancePreset, customInsuranceName)
+                        const baseTotal = createdSessionsCount * pol.perSessionAmount
+                        const discountAmt = pol.discountInfo && createdSessionsCount >= pol.discountInfo.sessions
+                          ? Math.round(baseTotal * (pol.discountInfo.percent / 100))
+                          : 0
+                        const total = baseTotal - discountAmt + pol.stampAmount
+                        return (
+                          <>
+                            {createdSessionsCount} sesión{createdSessionsCount !== 1 ? 'es' : ''} × ${pol.perSessionAmount.toLocaleString()}
+                            {discountAmt > 0 ? ` − ${pol.discountInfo!.percent}% descuento` : ''}
+                            {pol.stampAmount > 0 ? ` + estampillado $${pol.stampAmount.toLocaleString()}` : ''}
+                            {' = '}<strong>${total.toLocaleString()}</strong>
+                          </>
+                        )
+                      })()}
                     </p>
                   </div>
                 )}
@@ -1190,28 +1381,17 @@ export function Booking() {
 
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-2">Obra social</label>
-                <div className="grid sm:grid-cols-3 gap-2 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setInsurancePreset('iapos')}
-                    className={`px-4 py-3 rounded-lg border text-left ${insurancePreset === 'iapos' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                  >
-                    IAPOS
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInsurancePreset('swiss_medical')}
-                    className={`px-4 py-3 rounded-lg border text-left ${insurancePreset === 'swiss_medical' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                  >
-                    SWISS MEDICAL
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInsurancePreset('otra')}
-                    className={`px-4 py-3 rounded-lg border text-left ${insurancePreset === 'otra' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                  >
-                    Otra
-                  </button>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                  {(['iapos', 'osdop', 'swiss_medical', 'escencial', 'osde', 'galeno', 'particular', 'otra'] as InsurancePreset[]).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setInsurancePreset(preset)}
+                      className={`px-3 py-2 rounded-lg border text-left text-sm ${insurancePreset === preset ? 'border-primary bg-primary/5' : 'border-border'}`}
+                    >
+                      {preset === 'otra' ? 'Otra' : preset === 'particular' ? 'Particular' : preset.toUpperCase()}
+                    </button>
+                  ))}
                 </div>
 
                 {insurancePreset === 'otra' ? (
@@ -1248,26 +1428,23 @@ export function Booking() {
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                     />
                   </div>
-                  {insurancePreset !== 'iapos' ? (
+                  {insurancePreset !== 'particular' && (
                   <div>
-                    <label className="block text-sm font-medium mb-2">Orden médica (archivo)</label>
+                    <label className="block text-sm font-medium mb-2">
+                      Orden médica (archivo){insurancePreset === 'iapos' ? ' — opcional' : ''}
+                    </label>
                     <input
                       type="file"
                       accept=".pdf,.jpg,.jpeg,.png,.webp"
                       onChange={(e) => setMedicalOrderFile(e.target.files?.[0] || null)}
                       className="w-full px-4 py-3 rounded-lg border border-input bg-background"
                     />
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Podés seleccionar manualmente las sesiones en la agenda (hasta el máximo indicado).
-                    </p>
-                  </div>
-                  ) : (
-                    <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
-                      <p className="text-sm font-medium text-primary">IAPOS: no se requiere orden médica</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Debés traer <strong>3 bonos por cada sesión</strong>. No es necesario adjuntar ningún archivo.
+                    {insurancePreset === 'iapos' && (
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Para IAPOS también debés traer <strong>3 bonos por sesión</strong>.
                       </p>
-                    </div>
+                    )}
+                  </div>
                   )}
 
                   <div>
@@ -1291,7 +1468,7 @@ export function Booking() {
                   disabled={
                     (insurancePreset === 'otra' && !customInsuranceName.trim()) ||
                     (appointmentMode === 'tratamiento' && Number(treatmentSessions || '0') <= 0) ||
-                    (appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && !medicalOrderFile)
+                    (appointmentMode === 'tratamiento' && insurancePreset !== 'iapos' && insurancePreset !== 'particular' && !medicalOrderFile)
                   }
                   onClick={() => {
                     setSubmitError(null)
@@ -1393,6 +1570,9 @@ export function Booking() {
                           )}
                           {availabilityError && (
                             <p className="text-xs text-destructive">{availabilityError}</p>
+                          )}
+                          {dailyCapReached && (
+                            <p className="text-xs text-destructive">Cupo diario OSDOP/ESCENCIAL completo para esta fecha (máx. 12). Seleccioná otro día.</p>
                           )}
                           {!isLoadingAvailability && availableSlots.length === 0 && !availabilityError && (
                             <p className="text-xs text-muted-foreground">Sin horarios en esta fecha.</p>
@@ -1594,6 +1774,9 @@ export function Booking() {
               )}
               {availabilityError && (
                 <p className="text-sm text-destructive mb-4">{availabilityError}</p>
+              )}
+              {dailyCapReached && (
+                <p className="text-sm text-destructive mb-4">Cupo diario OSDOP/ESCENCIAL completo para esta fecha (máx. 12). Seleccioná otro día.</p>
               )}
               {!isLoadingAvailability && availableSlots.length === 0 && !availabilityError && (
                 <p className="text-sm text-muted-foreground mb-4">No hay horarios configurados o disponibles para esta fecha.</p>

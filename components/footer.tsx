@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { MapPin, Phone, Instagram, Mail } from "lucide-react"
+import { MapPin, Phone, Instagram } from "lucide-react"
 import { Logo } from "@/components/logo"
 
 export function Footer() {
@@ -31,12 +31,7 @@ export function Footer() {
                 <Phone className="w-5 h-5 shrink-0" />
                 <span>341 337 7446</span>
               </div>
-              <div className="flex items-center gap-3">
-                <Mail className="w-5 h-5 shrink-0" />
-                <a href="mailto:info@rekcentro.com.ar" className="hover:text-foreground transition-colors">
-                  info@rekcentro.com.ar
-                </a>
-              </div>
+
             </div>
           </div>
 

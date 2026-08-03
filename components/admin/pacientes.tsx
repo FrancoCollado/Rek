@@ -14,6 +14,7 @@ interface Patient {
   email: string | null
   telefono: string
   obra_social: string | null
+  dni: string | null
 }
 
 interface Treatment {
@@ -52,6 +53,7 @@ type PatientForm = {
   email: string
   telefono: string
   obra_social: string
+  dni: string
 }
 
 type TreatmentForm = {
@@ -70,6 +72,7 @@ const defaultPatientForm: PatientForm = {
   email: '',
   telefono: '',
   obra_social: '',
+  dni: '',
 }
 
 function buildDefaultTreatmentForm(serviceScope?: ServiceScope): TreatmentForm {
@@ -108,6 +111,8 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
   const [showTreatmentFormFor, setShowTreatmentFormFor] = useState<string | null>(null)
   const [treatmentForm, setTreatmentForm] = useState<TreatmentForm>(buildDefaultTreatmentForm(serviceScope))
   const [saving, setSaving] = useState(false)
+  const [editingTreatmentId, setEditingTreatmentId] = useState<string | null>(null)
+  const [editTreatmentForm, setEditTreatmentForm] = useState<TreatmentForm>(buildDefaultTreatmentForm(serviceScope))
 
   useEffect(() => {
     loadPatientsData()
@@ -127,7 +132,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
       ] = await Promise.all([
         supabase
           .from('pacientes')
-          .select('id, nombre, apellido, email, telefono, obra_social')
+          .select('id, nombre, apellido, email, telefono, obra_social, dni')
           .eq('entidad_id', currentEntity)
           .order('apellido')
           .order('nombre'),
@@ -163,15 +168,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
         }))
       const normalizedHistory = (historyData || []) as TurnoHistory[]
 
-      const usedPatientIds = new Set<string>()
-      normalizedTreatments.forEach((t) => usedPatientIds.add(t.paciente_id))
-      normalizedHistory.forEach((h) => usedPatientIds.add(h.paciente_id))
-
-      const filteredPatients = serviceScope
-        ? ((patientsData || []) as Patient[]).filter((patient) => usedPatientIds.has(patient.id))
-        : ((patientsData || []) as Patient[])
-
-      setPatients(filteredPatients)
+      setPatients((patientsData || []) as Patient[])
       setTreatments(normalizedTreatments)
       setHistory(normalizedHistory)
       setBalances(
@@ -230,6 +227,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
       email: patient.email || '',
       telefono: patient.telefono,
       obra_social: patient.obra_social || '',
+      dni: patient.dni || '',
     })
     setEditingId(patient.id)
     setShowPatientForm(true)
@@ -269,6 +267,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
         email: patientForm.email.trim() || null,
         telefono: patientForm.telefono.trim(),
         obra_social: patientForm.obra_social.trim() || null,
+        dni: patientForm.dni.trim() || null,
       }
 
       if (editingId) {
@@ -293,6 +292,47 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
     } catch (saveError) {
       console.error('[v0] Error saving patient:', saveError)
       setError('No se pudo guardar el paciente.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleEditTreatment = (treatment: Treatment) => {
+    setEditTreatmentForm({
+      servicio: treatment.servicio,
+      tipo_plan: treatment.tipo_plan,
+      sesiones_totales: String(treatment.sesiones_totales),
+      precio_total: String(treatment.precio_total),
+      notas: treatment.notas || '',
+    })
+    setEditingTreatmentId(treatment.id)
+    setShowTreatmentFormFor(null)
+  }
+
+  const handleUpdateTreatment = async () => {
+    if (!editingTreatmentId) return
+    try {
+      setSaving(true)
+      setError(null)
+      const supabase = createClient()
+      const totalSessions = Math.max(1, Number(editTreatmentForm.sesiones_totales || '1'))
+      const totalPrice = Math.max(0, Number(editTreatmentForm.precio_total || '0'))
+      const { error: updateError } = await supabase
+        .from('tratamientos')
+        .update({
+          servicio: editTreatmentForm.servicio,
+          tipo_plan: editTreatmentForm.tipo_plan,
+          sesiones_totales: totalSessions,
+          precio_total: totalPrice,
+          notas: editTreatmentForm.notas.trim() || null,
+        })
+        .eq('id', editingTreatmentId)
+      if (updateError) throw updateError
+      setEditingTreatmentId(null)
+      await loadPatientsData()
+    } catch (err) {
+      console.error('[v0] Error updating treatment:', err)
+      setError('No se pudo actualizar el tratamiento.')
     } finally {
       setSaving(false)
     }
@@ -412,6 +452,14 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
                 value={patientForm.obra_social}
                 onChange={(e) => setPatientForm({ ...patientForm, obra_social: e.target.value })}
                 placeholder="Opcional (ej: IAPOS, OSDE, Swiss Medical)"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">DNI <span className="text-muted-foreground font-normal">(opcional)</span></label>
+              <Input
+                value={patientForm.dni}
+                onChange={(e) => setPatientForm({ ...patientForm, dni: e.target.value })}
+                placeholder="Ej: 30123456"
               />
             </div>
             <div className="md:col-span-2 flex gap-2 justify-end">
@@ -589,21 +637,58 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
 
                             return (
                               <div key={treatment.id} className="p-3 bg-secondary rounded-lg text-sm">
-                                <div className="flex flex-wrap gap-3">
-                                  <span className="font-medium">{serviceLabels[treatment.servicio] || treatment.servicio}</span>
-                                  <span>Tipo: {treatment.tipo_plan === 'orden' ? 'Orden' : 'Libre'}</span>
-                                  <span>Estado: {treatment.estado}</span>
-                                </div>
-                                <div className="flex flex-wrap gap-3 text-muted-foreground mt-1">
-                                  <span>Sesiones: {treatment.sesiones_realizadas}/{treatment.sesiones_totales}</span>
-                                  <span>Pendientes: {remaining}</span>
-                                  <span>Pagado: ${treatment.monto_pagado.toFixed(2)}</span>
-                                  <span>Saldo: ${debt.toFixed(2)}</span>
-                                </div>
-                                {treatment.notas && (
-                                  <div className="mt-2 text-muted-foreground">
-                                    <span className="font-medium text-foreground">Notas:</span> {treatment.notas}
+                                {editingTreatmentId === treatment.id ? (
+                                  <div className="space-y-2">
+                                    <div className="grid sm:grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="text-xs font-medium">Tipo</label>
+                                        <select value={editTreatmentForm.tipo_plan} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, tipo_plan: e.target.value as 'orden' | 'libre' })} className="w-full px-2 py-1 border border-border rounded bg-background text-sm">
+                                          <option value="orden">Orden médica</option>
+                                          <option value="libre">Sesión libre</option>
+                                        </select>
+                                      </div>
+                                      <div>
+                                        <label className="text-xs font-medium">Sesiones totales</label>
+                                        <Input type="number" min="1" value={editTreatmentForm.sesiones_totales} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, sesiones_totales: e.target.value })} className="h-8 text-sm" />
+                                      </div>
+                                      <div>
+                                        <label className="text-xs font-medium">Precio total</label>
+                                        <Input type="number" min="0" value={editTreatmentForm.precio_total} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, precio_total: e.target.value })} className="h-8 text-sm" />
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label className="text-xs font-medium">Notas</label>
+                                      <textarea value={editTreatmentForm.notas} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, notas: e.target.value })} className="w-full px-2 py-1 border border-border rounded bg-background text-sm min-h-16" />
+                                    </div>
+                                    <div className="flex gap-2 justify-end">
+                                      <Button type="button" size="sm" variant="outline" onClick={() => setEditingTreatmentId(null)}>Cancelar</Button>
+                                      <Button type="button" size="sm" onClick={handleUpdateTreatment} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button>
+                                    </div>
                                   </div>
+                                ) : (
+                                  <>
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex flex-wrap gap-3">
+                                        <span className="font-medium">{serviceLabels[treatment.servicio] || treatment.servicio}</span>
+                                        <span>Tipo: {treatment.tipo_plan === 'orden' ? 'Orden' : 'Libre'}</span>
+                                        <span>Estado: {treatment.estado}</span>
+                                      </div>
+                                      <Button type="button" size="sm" variant="ghost" onClick={() => handleEditTreatment(treatment)} title="Editar tratamiento">
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </Button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-3 text-muted-foreground mt-1">
+                                      <span>Sesiones: {treatment.sesiones_realizadas}/{treatment.sesiones_totales}</span>
+                                      <span>Pendientes: {remaining}</span>
+                                      <span>Pagado: ${treatment.monto_pagado.toFixed(2)}</span>
+                                      <span>Saldo: ${debt.toFixed(2)}</span>
+                                    </div>
+                                    {treatment.notas && (
+                                      <div className="mt-2 text-muted-foreground">
+                                        <span className="font-medium text-foreground">Notas:</span> {treatment.notas}
+                                      </div>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             )
