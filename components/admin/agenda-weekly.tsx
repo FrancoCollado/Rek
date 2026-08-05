@@ -663,11 +663,12 @@ export default function AgendaWeekly({
     try {
       setFeriadosLoading(true)
       setFeriadosError(null)
-      const res = await fetch(`https://nolaborables.com.ar/api/v2/feriados/${year}`)
-      if (!res.ok) throw new Error('No se pudo obtener el listado de feriados.')
-      const data: FeriadoItem[] = await res.json()
-      setFeriadosList(data)
-      setSelectedFeriados(new Set(data.map((f) => `${f.mes}-${f.dia}`)))
+      const res = await fetch(`/api/feriados?year=${year}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'No se pudo obtener el listado de feriados.')
+      const feriadoData: FeriadoItem[] = data
+      setFeriadosList(feriadoData)
+      setSelectedFeriados(new Set(feriadoData.map((f) => `${f.mes}-${f.dia}`)))
     } catch (err: any) {
       setFeriadosError(err?.message || 'Error al obtener feriados.')
     } finally {
@@ -1044,7 +1045,7 @@ export default function AgendaWeekly({
       setShowCreateModal(false)
       setCreateSlot(null)
       setManualTurnoForm(defaultManualTurnoForm)
-      await fetchAppointments(currentDate || new Date())
+      await Promise.all([fetchAppointments(currentDate || new Date()), fetchCreateFormOptions()])
     } catch (error: any) {
       console.error('[v0] Error creating manual turno:', error)
       setCreateError(error?.message || 'No se pudo crear el turno manualmente.')
