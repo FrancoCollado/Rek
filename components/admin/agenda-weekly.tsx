@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { ChevronLeft, ChevronRight, Check, FileText, Lock, Palette, Plus, XCircle } from 'lucide-react'
+import { ArrowRightLeft, ChevronLeft, ChevronRight, Check, Edit2, FileText, Lock, Palette, Plus, XCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import TurnoCompletionModal from '@/components/admin/turno-completion-modal'
 
@@ -372,6 +372,16 @@ export default function AgendaWeekly({
   const [newTreatmentForm, setNewTreatmentForm] = useState<NewTreatmentInlineForm>({ tipo_plan: 'orden', sesiones_totales: '10', precio_total: '60000', notas: '' })
   const [newTreatmentSaving, setNewTreatmentSaving] = useState(false)
   const [newTreatmentError, setNewTreatmentError] = useState<string | null>(null)
+  // Editar / desplazar turno
+  const [showEditTurnoModal, setShowEditTurnoModal] = useState(false)
+  const [editingTurno, setEditingTurno] = useState<Appointment | null>(null)
+  const [editTurnoFecha, setEditTurnoFecha] = useState('')
+  const [editTurnoHora, setEditTurnoHora] = useState('')
+  const [editTurnoNotas, setEditTurnoNotas] = useState('')
+  const [editTurnoSaving, setEditTurnoSaving] = useState(false)
+  const [editTurnoError, setEditTurnoError] = useState<string | null>(null)
+  // Desplazar turno: modo click-para-mover
+  const [movingTurno, setMovingTurno] = useState<Appointment | null>(null)
 
   const cancelMessagePreview = selectedCancelTurno
     ? buildDefaultCancellationMessage(selectedCancelTurno)
@@ -845,6 +855,60 @@ export default function AgendaWeekly({
     setShowCancelModal(true)
   }
 
+  const handleMoveToSlot = async (dayIndex: number, time: string) => {
+    if (!movingTurno) return
+    const targetDate = formatDateForDb(weekDays[dayIndex])
+    if (targetDate === movingTurno.date && time === movingTurno.time) {
+      setMovingTurno(null)
+      return
+    }
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('turnos')
+        .update({ fecha: targetDate, hora: `${time}:00` })
+        .eq('id', movingTurno.id)
+      if (error) throw error
+      setMovingTurno(null)
+      await fetchAppointments(currentDate || new Date())
+    } catch (err: any) {
+      console.error('[v0] Error desplazando turno:', err)
+    }
+  }
+
+  const handleOpenEditTurnoModal = (appt: Appointment) => {
+    setEditingTurno(appt)
+    setEditTurnoFecha(appt.date)
+    setEditTurnoHora(appt.time)
+    setEditTurnoNotas(appt.notas || '')
+    setEditTurnoError(null)
+    setShowEditTurnoModal(true)
+  }
+
+  const handleSaveEditTurno = async () => {
+    if (!editingTurno) return
+    try {
+      setEditTurnoSaving(true)
+      setEditTurnoError(null)
+      const supabase = createClient()
+      const { error } = await supabase
+        .from('turnos')
+        .update({
+          fecha: editTurnoFecha,
+          hora: `${editTurnoHora}:00`,
+          notas: editTurnoNotas.trim() || null,
+        })
+        .eq('id', editingTurno.id)
+      if (error) throw error
+      setShowEditTurnoModal(false)
+      await fetchAppointments(currentDate || new Date())
+    } catch (err: any) {
+      setEditTurnoError(err?.message || 'No se pudo guardar el turno.')
+    } finally {
+      setEditTurnoSaving(false)
+    }
+  }
+
   const handleConfirmCancel = async () => {
     if (!selectedCancelTurno) return
 
@@ -1095,6 +1159,19 @@ export default function AgendaWeekly({
         </div>
       </div>
 
+      {/* Banner modo desplazar turno */}
+      {movingTurno ? (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-orange-400/50 bg-orange-500/10 px-4 py-2 text-sm">
+          <span className="flex items-center gap-2">
+            <ArrowRightLeft className="w-4 h-4 text-orange-500 shrink-0" />
+            <span>Seleccioná el horario destino para mover el turno de <strong>{movingTurno.patient}</strong> ({movingTurno.date} {movingTurno.time} hs)</span>
+          </span>
+          <Button size="sm" variant="ghost" onClick={() => setMovingTurno(null)} className="ml-4 shrink-0 text-xs">
+            Cancelar
+          </Button>
+        </div>
+      ) : null}
+
       {/* Tabla semanal */}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse">
@@ -1145,16 +1222,29 @@ export default function AgendaWeekly({
                             <button type="button" onClick={() => handleDeleteBlock(block.id)} className="text-destructive ml-1 hover:opacity-70 shrink-0" title="Desbloquear">×</button>
                           </div>
                         ) : slotsAppts.length < getSlotCapacity(time) && (!canCreateSlot || canCreateSlot(dayIndex, time)) ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 w-full justify-center text-[11px] text-muted-foreground"
-                            onClick={() => handleOpenCreateModal(dayIndex, time)}
-                            title="Crear turno manual"
-                          >
-                            <Plus className="w-3 h-3 mr-1" />
-                            {slotsAppts.length === 0 ? 'Crear' : `Agregar (${slotsAppts.length}/${getSlotCapacity(time)})`}
-                          </Button>
+                          movingTurno ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-full justify-center text-[11px] text-orange-500 hover:bg-orange-500/10"
+                              onClick={() => handleMoveToSlot(dayIndex, time)}
+                              title={`Mover turno de ${movingTurno.patient} aquí`}
+                            >
+                              <ArrowRightLeft className="w-3 h-3 mr-1" />
+                              Mover aquí
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-full justify-center text-[11px] text-muted-foreground"
+                              onClick={() => handleOpenCreateModal(dayIndex, time)}
+                              title="Crear turno manual"
+                            >
+                              <Plus className="w-3 h-3 mr-1" />
+                              {slotsAppts.length === 0 ? 'Crear' : `Agregar (${slotsAppts.length}/${getSlotCapacity(time)})`}
+                            </Button>
+                          )
                           ) : null}
                         {slotsAppts.map((appt) => {
                           const isCompleted = appt.estado === 'realizado' || appt.estado === 'completado'
@@ -1175,7 +1265,7 @@ export default function AgendaWeekly({
                             : undefined
                           
                           return (
-                            <div key={appt.id} className={`rounded p-1.5 text-[11px] border ${useSpecialtyStyle ? '' : bgColor}`} style={specialtyStyle}>
+                            <div key={appt.id} className={`rounded p-1.5 text-[11px] border ${movingTurno?.id === appt.id ? 'border-dashed border-orange-400 opacity-60' : useSpecialtyStyle ? '' : bgColor}`} style={movingTurno?.id === appt.id ? undefined : specialtyStyle}>
                               <div className="font-medium leading-tight text-foreground truncate">{appt.patient}</div>
                               <div className="text-muted-foreground text-[10px] leading-tight">{appt.service}</div>
                               {appt.especialidad_nombre ? (
@@ -1189,6 +1279,24 @@ export default function AgendaWeekly({
                                 </div>
                               ) : null}
                               <div className="flex gap-0.5 mt-0.5">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className={`h-4 px-1 text-[10px] ${movingTurno?.id === appt.id ? 'text-orange-500' : ''}`}
+                                  onClick={() => movingTurno?.id === appt.id ? setMovingTurno(null) : setMovingTurno(appt)}
+                                  title={movingTurno?.id === appt.id ? 'Cancelar movimiento' : 'Desplazar a otro horario'}
+                                >
+                                  <ArrowRightLeft className="w-2.5 h-2.5" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-4 px-1 text-[10px]"
+                                  onClick={() => handleOpenEditTurnoModal(appt)}
+                                  title="Editar turno"
+                                >
+                                  <Edit2 className="w-2.5 h-2.5" />
+                                </Button>
                                 <Button size="sm" variant="ghost" className="h-4 px-1 text-[10px]" onClick={() => handleCompleteAppointment(appt)}>
                                   <Check className="w-2.5 h-2.5" />
                                 </Button>
@@ -1707,6 +1815,57 @@ export default function AgendaWeekly({
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: editar / desplazar turno */}
+      <Dialog open={showEditTurnoModal} onOpenChange={setShowEditTurnoModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Editar turno</DialogTitle>
+            <DialogDescription>
+              {editingTurno ? `${editingTurno.patient} — ${editingTurno.date} ${editingTurno.time} hs` : 'Modificá fecha, horario u observaciones del turno.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Nueva fecha</label>
+              <input
+                type="date"
+                value={editTurnoFecha}
+                onChange={(e) => setEditTurnoFecha(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mt-1"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Nuevo horario</label>
+              <select
+                value={editTurnoHora}
+                onChange={(e) => setEditTurnoHora(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mt-1"
+              >
+                {TIME_SLOTS.map((slot) => (
+                  <option key={slot} value={slot}>{slot} hs</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Observaciones</label>
+              <textarea
+                value={editTurnoNotas}
+                onChange={(e) => setEditTurnoNotas(e.target.value)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm min-h-20 mt-1"
+                placeholder="Observaciones del turno (opcional)"
+              />
+            </div>
+            {editTurnoError ? <p className="text-sm text-destructive">{editTurnoError}</p> : null}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowEditTurnoModal(false)} disabled={editTurnoSaving}>Cancelar</Button>
+              <Button onClick={handleSaveEditTurno} disabled={editTurnoSaving}>
+                {editTurnoSaving ? 'Guardando...' : 'Guardar cambios'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

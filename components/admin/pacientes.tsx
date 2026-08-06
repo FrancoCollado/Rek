@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, Edit2, Trash2, X, ChevronDown, FilePlus2 } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, ChevronDown, FilePlus2, Search } from 'lucide-react'
 
 interface Patient {
   id: string
@@ -113,6 +114,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
   const [saving, setSaving] = useState(false)
   const [editingTreatmentId, setEditingTreatmentId] = useState<string | null>(null)
   const [editTreatmentForm, setEditTreatmentForm] = useState<TreatmentForm>(buildDefaultTreatmentForm(serviceScope))
+  const [searchTerm, setSearchTerm] = useState('')
 
   useEffect(() => {
     loadPatientsData()
@@ -213,6 +215,17 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
     }
     return map
   }, [balances])
+
+  const filteredPatients = useMemo(() => {
+    if (!searchTerm.trim()) return patients
+    const q = searchTerm.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+    return patients.filter((p) => {
+      const name = `${p.nombre} ${p.apellido}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+      const dni = (p.dni || '').toLowerCase()
+      const tel = (p.telefono || '').toLowerCase()
+      return name.includes(q) || dni.includes(q) || tel.includes(q)
+    })
+  }, [patients, searchTerm])
 
   const handleAdd = () => {
     setPatientForm(defaultPatientForm)
@@ -388,7 +401,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
 
   return (
     <div className="p-8">
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-4xl font-bold">Pacientes</h1>
           <p className="text-muted-foreground">Gestiona pacientes, planes de sesiones e historial clínico</p>
@@ -398,6 +411,15 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
           Nuevo paciente
         </Button>
       </div>
+      <div className="relative mb-8">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        <Input
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Buscar por nombre, apellido, DNI o teléfono..."
+          className="pl-9"
+        />
+      </div>
 
       {error && (
         <Card className="p-4 mb-6 border-destructive/30 bg-destructive/5 text-sm text-destructive">
@@ -405,80 +427,18 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
         </Card>
       )}
 
-      {showPatientForm && (
-        <Card className="p-6 mb-8 bg-primary/5 border-primary/30">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold">{editingId ? 'Editar paciente' : 'Nuevo paciente'}</h2>
-            <button type="button" onClick={() => setShowPatientForm(false)}>
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <form onSubmit={handlePatientSubmit} className="grid md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm font-medium">Nombre</label>
-              <Input
-                value={patientForm.nombre}
-                onChange={(e) => setPatientForm({ ...patientForm, nombre: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Apellido</label>
-              <Input
-                value={patientForm.apellido}
-                onChange={(e) => setPatientForm({ ...patientForm, apellido: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Email</label>
-              <Input
-                type="email"
-                value={patientForm.email}
-                onChange={(e) => setPatientForm({ ...patientForm, email: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Teléfono</label>
-              <Input
-                value={patientForm.telefono}
-                onChange={(e) => setPatientForm({ ...patientForm, telefono: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Obra social</label>
-              <Input
-                value={patientForm.obra_social}
-                onChange={(e) => setPatientForm({ ...patientForm, obra_social: e.target.value })}
-                placeholder="Opcional (ej: IAPOS, OSDE, Swiss Medical)"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">DNI <span className="text-muted-foreground font-normal">(opcional)</span></label>
-              <Input
-                value={patientForm.dni}
-                onChange={(e) => setPatientForm({ ...patientForm, dni: e.target.value })}
-                placeholder="Ej: 30123456"
-              />
-            </div>
-            <div className="md:col-span-2 flex gap-2 justify-end">
-              <Button type="button" variant="outline" onClick={() => setShowPatientForm(false)}>
-                Cancelar
-              </Button>
-              <Button type="submit" disabled={saving}>
-                {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear paciente'}
-              </Button>
-            </div>
-          </form>
-        </Card>
-      )}
+
 
       {loading ? (
         <Card className="p-6 text-sm text-muted-foreground">Cargando pacientes...</Card>
       ) : (
         <div className="space-y-3">
-          {patients.map((patient) => {
+          {filteredPatients.length === 0 ? (
+            <Card className="p-6 text-sm text-muted-foreground">
+              {searchTerm ? 'No se encontraron pacientes con ese criterio.' : 'No hay pacientes registrados.'}
+            </Card>
+          ) : null}
+          {filteredPatients.map((patient) => {
             const patientTreatments = treatmentByPatient.get(patient.id) || []
             const activeTreatment = patientTreatments.find((t) => t.estado === 'activo')
             const patientBalance = balanceByPatient.get(patient.id)
@@ -546,7 +506,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
                           variant="outline"
                           className="gap-2"
                           onClick={() => {
-                            setShowTreatmentFormFor(showTreatmentFormFor === patient.id ? null : patient.id)
+                            setShowTreatmentFormFor(patient.id)
                             setTreatmentForm(buildDefaultTreatmentForm(serviceScope))
                           }}
                         >
@@ -555,79 +515,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
                         </Button>
                       </div>
 
-                      {showTreatmentFormFor === patient.id && (
-                        <Card className="p-4 mb-4 bg-secondary/30">
-                          <div className="grid md:grid-cols-2 gap-3">
-                            {!serviceScope ? (
-                              <div>
-                                <label className="text-sm font-medium">Servicio</label>
-                                <select
-                                  value={treatmentForm.servicio}
-                                  onChange={(e) => setTreatmentForm({ ...treatmentForm, servicio: e.target.value })}
-                                  className="w-full px-3 py-2 border border-border rounded-lg bg-background"
-                                >
-                                  <option value="kinesiologia">Kinesiología</option>
-                                  <option value="traumatologia">Traumatología</option>
-                                </select>
-                              </div>
-                            ) : (
-                              <div>
-                                <label className="text-sm font-medium">Servicio</label>
-                                <div className="w-full px-3 py-2 border border-border rounded-lg bg-secondary/40 text-sm">
-                                  {serviceLabels[serviceScope] || serviceScope}
-                                </div>
-                              </div>
-                            )}
-                            <div>
-                              <label className="text-sm font-medium">Tipo</label>
-                              <select
-                                value={treatmentForm.tipo_plan}
-                                onChange={(e) => setTreatmentForm({ ...treatmentForm, tipo_plan: e.target.value as 'orden' | 'libre' })}
-                                className="w-full px-3 py-2 border border-border rounded-lg bg-background"
-                              >
-                                <option value="orden">Orden médica</option>
-                                <option value="libre">Sesión libre</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="text-sm font-medium">Sesiones totales</label>
-                              <Input
-                                type="number"
-                                min="1"
-                                value={treatmentForm.sesiones_totales}
-                                onChange={(e) => setTreatmentForm({ ...treatmentForm, sesiones_totales: e.target.value })}
-                              />
-                            </div>
-                            <div>
-                              <label className="text-sm font-medium">Precio total</label>
-                              <Input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={treatmentForm.precio_total}
-                                onChange={(e) => setTreatmentForm({ ...treatmentForm, precio_total: e.target.value })}
-                              />
-                            </div>
-                            <div className="md:col-span-2">
-                              <label className="text-sm font-medium">Notas</label>
-                              <textarea
-                                value={treatmentForm.notas}
-                                onChange={(e) => setTreatmentForm({ ...treatmentForm, notas: e.target.value })}
-                                className="w-full px-3 py-2 border border-border rounded-lg bg-background min-h-24"
-                                placeholder="Opcional: observaciones clínicas, condiciones del plan o indicaciones"
-                              />
-                            </div>
-                          </div>
-                          <div className="flex justify-end gap-2 mt-3">
-                            <Button type="button" variant="outline" onClick={() => setShowTreatmentFormFor(null)}>
-                              Cancelar
-                            </Button>
-                            <Button type="button" onClick={() => handleCreateTreatment(patient.id)} disabled={saving}>
-                              {saving ? 'Guardando...' : 'Crear plan'}
-                            </Button>
-                          </div>
-                        </Card>
-                      )}
+
 
                       <div className="space-y-2">
                         {patientTreatments.length > 0 ? (
@@ -637,36 +525,7 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
 
                             return (
                               <div key={treatment.id} className="p-3 bg-secondary rounded-lg text-sm">
-                                {editingTreatmentId === treatment.id ? (
-                                  <div className="space-y-2">
-                                    <div className="grid sm:grid-cols-2 gap-2">
-                                      <div>
-                                        <label className="text-xs font-medium">Tipo</label>
-                                        <select value={editTreatmentForm.tipo_plan} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, tipo_plan: e.target.value as 'orden' | 'libre' })} className="w-full px-2 py-1 border border-border rounded bg-background text-sm">
-                                          <option value="orden">Orden médica</option>
-                                          <option value="libre">Sesión libre</option>
-                                        </select>
-                                      </div>
-                                      <div>
-                                        <label className="text-xs font-medium">Sesiones totales</label>
-                                        <Input type="number" min="1" value={editTreatmentForm.sesiones_totales} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, sesiones_totales: e.target.value })} className="h-8 text-sm" />
-                                      </div>
-                                      <div>
-                                        <label className="text-xs font-medium">Precio total</label>
-                                        <Input type="number" min="0" value={editTreatmentForm.precio_total} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, precio_total: e.target.value })} className="h-8 text-sm" />
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <label className="text-xs font-medium">Notas</label>
-                                      <textarea value={editTreatmentForm.notas} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, notas: e.target.value })} className="w-full px-2 py-1 border border-border rounded bg-background text-sm min-h-16" />
-                                    </div>
-                                    <div className="flex gap-2 justify-end">
-                                      <Button type="button" size="sm" variant="outline" onClick={() => setEditingTreatmentId(null)}>Cancelar</Button>
-                                      <Button type="button" size="sm" onClick={handleUpdateTreatment} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</Button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <>
+                                <>
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="flex flex-wrap gap-3">
                                         <span className="font-medium">{serviceLabels[treatment.servicio] || treatment.servicio}</span>
@@ -689,7 +548,6 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
                                       </div>
                                     )}
                                   </>
-                                )}
                               </div>
                             )
                           })
@@ -728,6 +586,196 @@ export default function PacientesComponent({ serviceScope }: { serviceScope?: Se
           })}
         </div>
       )}
+
+      {/* Modal: nuevo/editar paciente */}
+      <Dialog open={showPatientForm} onOpenChange={(open) => { if (!open) { setShowPatientForm(false); setEditingId(null); setPatientForm(defaultPatientForm) } }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{editingId ? 'Editar paciente' : 'Nuevo paciente'}</DialogTitle>
+            <DialogDescription>
+              {editingId ? 'Modificá los datos del paciente.' : 'Completá los datos para registrar un nuevo paciente.'}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handlePatientSubmit} className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium">Nombre</label>
+              <Input
+                value={patientForm.nombre}
+                onChange={(e) => setPatientForm({ ...patientForm, nombre: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Apellido</label>
+              <Input
+                value={patientForm.apellido}
+                onChange={(e) => setPatientForm({ ...patientForm, apellido: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Email</label>
+              <Input
+                type="email"
+                value={patientForm.email}
+                onChange={(e) => setPatientForm({ ...patientForm, email: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Teléfono</label>
+              <Input
+                value={patientForm.telefono}
+                onChange={(e) => setPatientForm({ ...patientForm, telefono: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Obra social</label>
+              <Input
+                value={patientForm.obra_social}
+                onChange={(e) => setPatientForm({ ...patientForm, obra_social: e.target.value })}
+                placeholder="Opcional (ej: IAPOS, OSDE, Swiss Medical)"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">DNI <span className="text-muted-foreground font-normal">(opcional)</span></label>
+              <Input
+                value={patientForm.dni}
+                onChange={(e) => setPatientForm({ ...patientForm, dni: e.target.value })}
+                placeholder="Ej: 30123456"
+              />
+            </div>
+            <div className="md:col-span-2 flex gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={() => setShowPatientForm(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear paciente'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: nuevo tratamiento */}
+      <Dialog open={showTreatmentFormFor !== null} onOpenChange={(open) => { if (!open) setShowTreatmentFormFor(null) }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Nuevo tratamiento</DialogTitle>
+            <DialogDescription>
+              {showTreatmentFormFor
+                ? `Paciente: ${formatPatientName(patients.find((p) => p.id === showTreatmentFormFor) || { nombre: '', apellido: '', id: '', email: null, telefono: '', obra_social: null, dni: null })}`
+                : 'Completá los datos del plan de tratamiento.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid md:grid-cols-2 gap-3">
+            {!serviceScope ? (
+              <div>
+                <label className="text-sm font-medium">Servicio</label>
+                <select
+                  value={treatmentForm.servicio}
+                  onChange={(e) => setTreatmentForm({ ...treatmentForm, servicio: e.target.value })}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-background"
+                >
+                  <option value="kinesiologia">Kinesiología</option>
+                  <option value="traumatologia">Traumatología</option>
+                </select>
+              </div>
+            ) : (
+              <div>
+                <label className="text-sm font-medium">Servicio</label>
+                <div className="w-full px-3 py-2 border border-border rounded-lg bg-secondary/40 text-sm">
+                  {serviceLabels[serviceScope] || serviceScope}
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="text-sm font-medium">Tipo</label>
+              <select
+                value={treatmentForm.tipo_plan}
+                onChange={(e) => setTreatmentForm({ ...treatmentForm, tipo_plan: e.target.value as 'orden' | 'libre' })}
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background"
+              >
+                <option value="orden">Orden médica</option>
+                <option value="libre">Sesión libre</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Sesiones totales</label>
+              <Input
+                type="number"
+                min="1"
+                value={treatmentForm.sesiones_totales}
+                onChange={(e) => setTreatmentForm({ ...treatmentForm, sesiones_totales: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Precio total</label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={treatmentForm.precio_total}
+                onChange={(e) => setTreatmentForm({ ...treatmentForm, precio_total: e.target.value })}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-sm font-medium">Notas</label>
+              <textarea
+                value={treatmentForm.notas}
+                onChange={(e) => setTreatmentForm({ ...treatmentForm, notas: e.target.value })}
+                className="w-full px-3 py-2 border border-border rounded-lg bg-background min-h-24"
+                placeholder="Opcional: observaciones clínicas, condiciones del plan o indicaciones"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button type="button" variant="outline" onClick={() => setShowTreatmentFormFor(null)}>
+              Cancelar
+            </Button>
+            <Button type="button" onClick={() => showTreatmentFormFor && handleCreateTreatment(showTreatmentFormFor)} disabled={saving}>
+              {saving ? 'Guardando...' : 'Crear plan'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: editar tratamiento */}
+      <Dialog open={editingTreatmentId !== null} onOpenChange={(open) => { if (!open) setEditingTreatmentId(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Editar tratamiento</DialogTitle>
+            <DialogDescription>Modificá los datos del plan.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium">Tipo</label>
+                <select value={editTreatmentForm.tipo_plan} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, tipo_plan: e.target.value as 'orden' | 'libre' })} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm">
+                  <option value="orden">Orden médica</option>
+                  <option value="libre">Sesión libre</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Sesiones totales</label>
+                <Input type="number" min="1" value={editTreatmentForm.sesiones_totales} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, sesiones_totales: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Precio total</label>
+                <Input type="number" min="0" value={editTreatmentForm.precio_total} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, precio_total: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Notas</label>
+              <textarea value={editTreatmentForm.notas} onChange={(e) => setEditTreatmentForm({ ...editTreatmentForm, notas: e.target.value })} className="w-full px-3 py-2 border border-border rounded-lg bg-background text-sm min-h-20" />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end mt-2">
+            <Button type="button" variant="outline" onClick={() => setEditingTreatmentId(null)}>Cancelar</Button>
+            <Button type="button" onClick={handleUpdateTreatment} disabled={saving}>{saving ? 'Guardando...' : 'Guardar cambios'}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
