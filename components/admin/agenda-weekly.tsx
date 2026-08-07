@@ -1174,7 +1174,7 @@ export default function AgendaWeekly({
 
       {/* Tabla semanal */}
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
+        <table className="w-full table-fixed border-collapse">
           <thead>
             <tr>
               <th className="w-14 p-1.5 text-left text-xs font-medium border border-border bg-secondary">Hora</th>
