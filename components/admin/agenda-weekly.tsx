@@ -1123,7 +1123,7 @@ export default function AgendaWeekly({
   }
 
   return (
-    <div className="p-5 md:p-6">
+    <div className="p-3 md:p-4">
       <Link
         href="/admin/especialidades"
         className="fixed right-3 top-1/2 z-20 -translate-y-1/2 rounded-l-lg border border-border bg-card px-3 py-2 text-xs font-medium shadow-sm hover:bg-secondary"
@@ -1177,9 +1177,9 @@ export default function AgendaWeekly({
         <table className="w-full border-collapse">
           <thead>
             <tr>
-              <th className="w-16 p-2 text-left text-xs font-medium border border-border bg-secondary">Hora</th>
+              <th className="w-14 p-1.5 text-left text-xs font-medium border border-border bg-secondary">Hora</th>
               {DAYS.map((day, i) => (
-                <th key={day} className="min-w-40 p-2 text-center text-xs font-medium border border-border bg-secondary">
+                <th key={day} className="p-1.5 text-center text-xs font-medium border border-border bg-secondary">
                   <div className="flex items-center justify-center gap-1">
                     <span>{day}</span>
                     <button
@@ -1205,7 +1205,7 @@ export default function AgendaWeekly({
               </tr>
             ) : visibleTimeSlots.map((time) => (
               <tr key={time}>
-                <td className="p-2 text-xs font-medium border border-border bg-secondary text-center">
+                <td className="p-1 text-xs font-medium border border-border bg-secondary text-center">
                   <div>{time}</div>
                   <div className="text-[9px] text-muted-foreground">×{getSlotCapacity(time)}</div>
                 </td>
@@ -1214,7 +1214,7 @@ export default function AgendaWeekly({
                   const dateStr = formatDateForDb(weekDays[dayIndex])
                   const block = isSlotBlocked(dateStr, time)
                   return (
-                    <td key={`${dayIndex}-${time}`} className="p-1 border border-border min-h-14 align-top">
+                    <td key={`${dayIndex}-${time}`} className="p-0.5 border border-border min-h-10 align-top">
                       <div className="space-y-0.5">
                         {block ? (
                           <div className="flex items-center justify-between px-1 py-0.5 rounded text-[10px] bg-destructive/10 border border-destructive/20 text-muted-foreground">
