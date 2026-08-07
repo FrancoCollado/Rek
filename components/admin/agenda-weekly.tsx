@@ -1267,7 +1267,7 @@ export default function AgendaWeekly({
                           return (
                             <div key={appt.id} className={`rounded p-1.5 text-[11px] border ${movingTurno?.id === appt.id ? 'border-dashed border-orange-400 opacity-60' : useSpecialtyStyle ? '' : bgColor}`} style={movingTurno?.id === appt.id ? undefined : specialtyStyle}>
                               <div className="font-medium leading-tight text-foreground truncate">{appt.patient}</div>
-                              <div className="text-muted-foreground text-[10px] leading-tight">{appt.service}</div>
+                              <div className="text-muted-foreground text-[10px] leading-tight truncate">{appt.service}</div>
                               {appt.especialidad_nombre ? (
                                 <div className="text-[9px] font-medium leading-tight" style={{ color: appt.especialidad_color || undefined }}>
                                   {appt.especialidad_nombre}
@@ -1278,7 +1278,7 @@ export default function AgendaWeekly({
                                   Sesión {appt.numero_sesion}/{appt.sesiones_totales}
                                 </div>
                               ) : null}
-                              <div className="flex gap-0.5 mt-0.5">
+                              <div className="flex flex-wrap gap-0.5 mt-0.5">
                                 <Button
                                   size="sm"
                                   variant="ghost"
